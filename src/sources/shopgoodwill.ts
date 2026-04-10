@@ -68,6 +68,8 @@ class ShopGoodwillSource {
   }
 
   async login(): Promise<boolean> {
+    log("shopgoodwill", `logging in as ${this._username}`);
+    const t0 = Date.now();
     try {
       const res = await fetch(`${API_ROOT}/SignIn/Login`, {
         method: "POST",
@@ -85,13 +87,13 @@ class ShopGoodwillSource {
       const data = (await res.json()) as Record<string, unknown>;
       if (data.status && data.accessToken) {
         this._token = data.accessToken as string;
-        console.log("shopgoodwill login successful");
+        log("shopgoodwill", `login success elapsed=${Date.now() - t0}ms`);
         return true;
       }
-      console.warn(`shopgoodwill login failed: ${data.message}`);
+      error("shopgoodwill", `login failed: ${data.message} (${Date.now() - t0}ms)`);
       return false;
     } catch (err) {
-      console.warn("shopgoodwill login error:", err);
+      error("shopgoodwill", `login error elapsed=${Date.now() - t0}ms`, err);
       return false;
     }
   }
@@ -106,6 +108,9 @@ class ShopGoodwillSource {
 
     const pageSize = options.page_size ?? 40;
     const maxPrice = options.max_price ?? 999999;
+
+    log("shopgoodwill", `search query=${JSON.stringify(query)} pageSize=${pageSize}${options.max_price != null ? ` maxPrice=${maxPrice}` : ""}`);
+    const t0 = Date.now();
 
     const params = {
       searchText: query,
@@ -141,10 +146,11 @@ class ShopGoodwillSource {
 
       const data = (await res.json()) as Record<string, unknown>;
       const items = ((data.searchResults as Record<string, unknown>)?.items as Record<string, unknown>[]) ?? [];
-      console.log(`shopgoodwill search ${JSON.stringify(query)} → ${items.length} items`);
-      return items.map(_parseItem).filter((x): x is GoodwillItem => x !== null);
+      const parsed = items.map(_parseItem).filter((x): x is GoodwillItem => x !== null);
+      log("shopgoodwill", `search "${query}" → ${parsed.length} items elapsed=${Date.now() - t0}ms`);
+      return parsed;
     } catch (err) {
-      console.warn(`shopgoodwill search ${JSON.stringify(query)} failed:`, err);
+      error("shopgoodwill", `search ${JSON.stringify(query)} failed`, err);
       return [];
     }
   }

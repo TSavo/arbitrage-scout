@@ -8,6 +8,8 @@
  * Docs: https://tcgcsv.com
  */
 
+import { log, error } from "@/lib/logger";
+
 const TCGCSV_BASE = "https://tcgcsv.com/tcgplayer";
 
 /** Key TCGplayer category IDs */
@@ -32,44 +34,56 @@ export interface TcgProductWithPrice {
 }
 
 async function _getJson(url: string): Promise<Record<string, unknown>> {
+  const t0 = Date.now();
   const res = await fetch(url, {
     headers: { "User-Agent": "arbitrage-scout-ts/1.0" },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-  return (await res.json()) as Record<string, unknown>;
+  const data = (await res.json()) as Record<string, unknown>;
+  log("tcgcsv", `GET ${url} elapsed=${Date.now() - t0}ms`);
+  return data;
 }
 
 /** Free TCGplayer data via TCGCSV mirror. No auth required. */
 export class TcgCsvSource {
   /** Fetch all available TCG categories. */
   async getCategories(): Promise<Record<string, unknown>[]> {
+    log("tcgcsv", "fetching categories");
     try {
       const data = await _getJson(`${TCGCSV_BASE}/categories`);
-      return (data.results as Record<string, unknown>[]) ?? [];
+      const results = (data.results as Record<string, unknown>[]) ?? [];
+      log("tcgcsv", `categories → ${results.length} categories`);
+      return results;
     } catch (err) {
-      console.warn("tcgcsv categories failed:", err);
+      error("tcgcsv", "categories fetch failed", err);
       return [];
     }
   }
 
   /** Get all sets/groups for a category (e.g. all Pokémon sets). */
   async getGroups(categoryId: number): Promise<Record<string, unknown>[]> {
+    log("tcgcsv", `fetching groups for categoryId=${categoryId}`);
     try {
       const data = await _getJson(`${TCGCSV_BASE}/${categoryId}/groups`);
-      return (data.results as Record<string, unknown>[]) ?? [];
+      const results = (data.results as Record<string, unknown>[]) ?? [];
+      log("tcgcsv", `groups categoryId=${categoryId} → ${results.length} groups`);
+      return results;
     } catch (err) {
-      console.warn(`tcgcsv groups for ${categoryId} failed:`, err);
+      error("tcgcsv", `groups categoryId=${categoryId} fetch failed`, err);
       return [];
     }
   }
 
   /** Get all products in a group (e.g. all cards in Base Set). */
   async getProducts(categoryId: number, groupId: number): Promise<Record<string, unknown>[]> {
+    log("tcgcsv", `fetching products categoryId=${categoryId} groupId=${groupId}`);
     try {
       const data = await _getJson(`${TCGCSV_BASE}/${categoryId}/${groupId}/products`);
-      return (data.results as Record<string, unknown>[]) ?? [];
+      const results = (data.results as Record<string, unknown>[]) ?? [];
+      log("tcgcsv", `products ${categoryId}/${groupId} → ${results.length} products`);
+      return results;
     } catch (err) {
-      console.warn(`tcgcsv products ${categoryId}/${groupId} failed:`, err);
+      error("tcgcsv", `products ${categoryId}/${groupId} fetch failed`, err);
       return [];
     }
   }
@@ -81,11 +95,14 @@ export class TcgCsvSource {
    * marketPrice, lowPrice, midPrice, highPrice, directLowPrice.
    */
   async getPrices(categoryId: number, groupId: number): Promise<Record<string, unknown>[]> {
+    log("tcgcsv", `fetching prices categoryId=${categoryId} groupId=${groupId}`);
     try {
       const data = await _getJson(`${TCGCSV_BASE}/${categoryId}/${groupId}/prices`);
-      return (data.results as Record<string, unknown>[]) ?? [];
+      const results = (data.results as Record<string, unknown>[]) ?? [];
+      log("tcgcsv", `prices ${categoryId}/${groupId} → ${results.length} price rows`);
+      return results;
     } catch (err) {
-      console.warn(`tcgcsv prices ${categoryId}/${groupId} failed:`, err);
+      error("tcgcsv", `prices ${categoryId}/${groupId} fetch failed`, err);
       return [];
     }
   }
@@ -96,6 +113,8 @@ export class TcgCsvSource {
    * Returns combined records with name, productId, marketPrice, lowPrice, subTypeName.
    */
   async getProductsAndPrices(categoryId: number, groupId: number): Promise<TcgProductWithPrice[]> {
+    log("tcgcsv", `getProductsAndPrices categoryId=${categoryId} groupId=${groupId}`);
+    const t0 = Date.now();
     const [products, prices] = await Promise.all([
       this.getProducts(categoryId, groupId),
       this.getPrices(categoryId, groupId),
@@ -105,7 +124,7 @@ export class TcgCsvSource {
       products.map((p) => [p.productId as number, p]),
     );
 
-    return prices.map((price) => {
+    const joined = prices.map((price) => {
       const pid = price.productId as number;
       const product = productMap.get(pid) ?? {};
       return {
@@ -119,5 +138,7 @@ export class TcgCsvSource {
         highPrice: (price.highPrice as number | null) ?? null,
       };
     });
+    log("tcgcsv", `getProductsAndPrices ${categoryId}/${groupId} → ${joined.length} combined rows elapsed=${Date.now() - t0}ms`);
+    return joined;
   }
 }

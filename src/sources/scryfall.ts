@@ -8,6 +8,8 @@
  * Docs: https://scryfall.com/docs/api
  */
 
+import { log, error } from "@/lib/logger";
+
 const SCRYFALL_API = "https://api.scryfall.com";
 /** 100ms between requests per Scryfall guidelines */
 const REQUEST_DELAY_MS = 100;
@@ -39,7 +41,9 @@ export class ScryfallSource {
   private async _politeDelay(): Promise<void> {
     const elapsed = Date.now() - this._lastRequest;
     if (elapsed < REQUEST_DELAY_MS) {
-      await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS - elapsed));
+      const delay = REQUEST_DELAY_MS - elapsed;
+      log("scryfall", `rate limit delay ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
     }
     this._lastRequest = Date.now();
   }
@@ -49,16 +53,22 @@ export class ScryfallSource {
     const url = params
       ? `${SCRYFALL_API}${path}?${new URLSearchParams(params)}`
       : `${SCRYFALL_API}${path}`;
+    const t0 = Date.now();
     const res = await fetch(url, {
       headers: { "User-Agent": "arbitrage-scout-ts/1.0" },
     });
-    if (!res.ok) throw new Error(`Scryfall ${res.status}: ${res.statusText}`);
+    if (!res.ok) {
+      error("scryfall", `GET ${path} → ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
+      throw new Error(`Scryfall ${res.status}: ${res.statusText}`);
+    }
+    log("scryfall", `GET ${path} elapsed=${Date.now() - t0}ms`);
     return (await res.json()) as Record<string, unknown>;
   }
 
   /** Search Scryfall for cards. Returns raw card objects with prices. */
   async searchCards(query: string, options: { limit?: number } = {}): Promise<ScryfallCard[]> {
     const limit = options.limit ?? 50;
+    log("scryfall", `searchCards query=${JSON.stringify(query)} limit=${limit}`);
     try {
       const data = await this._get("/cards/search", {
         q: query,
@@ -66,10 +76,10 @@ export class ScryfallSource {
         order: "name",
       });
       const cards = (data.data as ScryfallCard[]) ?? [];
-      console.log(`scryfall search ${JSON.stringify(query)} returned ${cards.length} cards`);
+      log("scryfall", `searchCards "${query}" → ${Math.min(cards.length, limit)} cards (${cards.length} total)`);
       return cards.slice(0, limit);
     } catch (err) {
-      console.warn(`scryfall search ${JSON.stringify(query)} failed:`, err);
+      error("scryfall", `searchCards ${JSON.stringify(query)} failed`, err);
       return [];
     }
   }
@@ -80,13 +90,16 @@ export class ScryfallSource {
    * Returns the cheapest non-foil USD price, or null.
    */
   async getPrice(cardName: string): Promise<number | null> {
+    log("scryfall", `getPrice cardName=${JSON.stringify(cardName)}`);
     try {
       const card = await this._get("/cards/named", { fuzzy: cardName });
       const prices = (card.prices as Record<string, string | null>) ?? {};
       const usd = prices.usd;
-      return usd != null ? parseFloat(usd) : null;
+      const result = usd != null ? parseFloat(usd) : null;
+      log("scryfall", `getPrice "${cardName}" → ${result != null ? `$${result}` : "not found"}`);
+      return result;
     } catch (err) {
-      console.debug(`scryfall price lookup ${JSON.stringify(cardName)} failed:`, err);
+      error("scryfall", `getPrice ${JSON.stringify(cardName)} failed`, err);
       return null;
     }
   }
@@ -98,6 +111,7 @@ export class ScryfallSource {
    * different editions of the same card.
    */
   async getAllPrices(cardName: string): Promise<number[]> {
+    log("scryfall", `getAllPrices cardName=${JSON.stringify(cardName)}`);
     try {
       const data = await this._get("/cards/search", {
         q: `!"${cardName}"`,
@@ -106,23 +120,28 @@ export class ScryfallSource {
         dir: "asc",
       });
       const cards = (data.data as ScryfallCard[]) ?? [];
-      return cards
+      const prices = cards
         .map((c) => c.prices?.usd)
         .filter((usd): usd is string => usd != null)
         .map(parseFloat);
+      log("scryfall", `getAllPrices "${cardName}" → ${prices.length} price points across ${cards.length} printings`);
+      return prices;
     } catch (err) {
-      console.debug(`scryfall all prices ${JSON.stringify(cardName)} failed:`, err);
+      error("scryfall", `getAllPrices ${JSON.stringify(cardName)} failed`, err);
       return [];
     }
   }
 
   /** Look up a single card by its Scryfall UUID. */
   async lookupById(scryfallId: string): Promise<ScryfallProduct | null> {
+    log("scryfall", `lookupById scryfallId=${scryfallId}`);
     try {
       const card = await this._get(`/cards/${scryfallId}`);
-      return _cardToProduct(card as ScryfallCard);
+      const product = _cardToProduct(card as ScryfallCard);
+      log("scryfall", `lookupById ${scryfallId} → ${product ? product.title : "null"}`);
+      return product;
     } catch (err) {
-      console.warn(`scryfall lookup ${scryfallId} failed:`, err);
+      error("scryfall", `lookupById ${scryfallId} failed`, err);
       return null;
     }
   }

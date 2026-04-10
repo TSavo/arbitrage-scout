@@ -10,6 +10,7 @@ import { IMarketplaceAdapter } from "./IMarketplaceAdapter";
 import { EbayAdapter } from "./ebay";
 import { ShopGoodwillAdapter } from "./shopgoodwill";
 import { PriceChartingAdapter } from "./pricecharting";
+import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
   app_id: string;
@@ -52,6 +53,9 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
         marketplace: ebayCfg.marketplace,
       }),
     );
+    log("registry", `built EbayAdapter env=${ebayCfg.env ?? "production"} marketplace=${ebayCfg.marketplace ?? "EBAY_US"}`);
+  } else {
+    log("registry", "EbayAdapter skipped (missing app_id or cert_id)");
   }
 
   const sgwCfg = cfg.shopgoodwill ?? {};
@@ -62,12 +66,19 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
         password: sgwCfg.password,
       }),
     );
+    log("registry", `built ShopGoodwillAdapter user=${sgwCfg.username}`);
+  } else {
+    log("registry", "ShopGoodwillAdapter skipped (missing username or password)");
   }
 
   const pcKey = cfg.pricecharting?.api_key ?? "";
   if (pcKey) {
     adapters.push(new PriceChartingAdapter({ api_key: pcKey }));
+    log("registry", "built PriceChartingAdapter");
+  } else {
+    log("registry", "PriceChartingAdapter skipped (missing api_key)");
   }
 
+  log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);
   return adapters;
 }

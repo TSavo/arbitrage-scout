@@ -10,6 +10,7 @@
  */
 
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
+import { log, error } from "@/lib/logger";
 
 const PRICECHARTING_API = "https://www.pricecharting.com/api";
 /** 1 req/sec limit; pad generously to avoid 403s */
@@ -44,7 +45,9 @@ class PriceChartingSource {
   private async _rateLimit(): Promise<void> {
     const elapsed = Date.now() - this._lastRequest;
     if (elapsed < REQUEST_DELAY_MS) {
-      await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS - elapsed));
+      const delay = REQUEST_DELAY_MS - elapsed;
+      log("pricecharting", `rate limit delay ${delay}ms`);
+      await new Promise((r) => setTimeout(r, delay));
     }
     this._lastRequest = Date.now();
   }
@@ -52,16 +55,18 @@ class PriceChartingSource {
   /** Search for products by name. Returns list of product dicts. */
   async search(query: string): Promise<Record<string, unknown>[]> {
     await this._rateLimit();
+    log("pricecharting", `search query=${JSON.stringify(query)}`);
+    const t0 = Date.now();
     try {
       const params = new URLSearchParams({ t: this._apiKey, q: query });
       const res = await fetch(`${PRICECHARTING_API}/products?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as Record<string, unknown>;
       const products = (data.products as Record<string, unknown>[]) ?? [];
-      console.log(`pricecharting search ${JSON.stringify(query)} → ${products.length} results`);
+      log("pricecharting", `search "${query}" → ${products.length} results elapsed=${Date.now() - t0}ms`);
       return products;
     } catch (err) {
-      console.warn(`pricecharting search ${JSON.stringify(query)} failed:`, err);
+      error("pricecharting", `search ${JSON.stringify(query)} failed`, err);
       return [];
     }
   }
@@ -152,6 +157,11 @@ export class PriceChartingAdapter implements IMarketplaceAdapter {
     query: string,
     options: { max_price?: number; limit?: number } = {},
   ): Promise<RawListing[]> {
+    const consoleName = CONSOLE_MAP.get(query) ?? query;
+    const limit = options.limit ?? 30;
+    const max_price = options.max_price;
+    log("pricecharting", `offers console=${consoleName} (${query}) limit=${limit}${max_price != null ? ` max_price=${max_price}` : ""}`);
+    const t0 = Date.now();
     try {
       const params = new URLSearchParams({
         t: this._apiKey,
@@ -166,10 +176,6 @@ export class PriceChartingAdapter implements IMarketplaceAdapter {
       const data = (await res.json()) as Record<string, unknown>;
       let offers = (data.offers as Record<string, unknown>[]) ?? [];
 
-      const consoleName = CONSOLE_MAP.get(query) ?? "";
-      const limit = options.limit ?? 30;
-      const max_price = options.max_price;
-
       if (max_price != null) {
         offers = offers.filter((o) => {
           const priceUsd = ((o.price as number | undefined) ?? 0) / 100;
@@ -177,7 +183,10 @@ export class PriceChartingAdapter implements IMarketplaceAdapter {
         });
       }
 
-      return offers.slice(0, limit).map((o) =>
+      const listings = offers.slice(0, limit);
+      log("pricecharting", `offers "${consoleName}" → ${listings.length} listings (${offers.length} before limit) elapsed=${Date.now() - t0}ms`);
+
+      return listings.map((o) =>
         makeRawListing({
           marketplace_id: "pricecharting",
           listing_id: String(o["offer-id"] ?? o.id ?? ""),
@@ -194,7 +203,7 @@ export class PriceChartingAdapter implements IMarketplaceAdapter {
         }),
       );
     } catch (err) {
-      console.warn(`pricecharting search ${JSON.stringify(query)} failed:`, err);
+      error("pricecharting", `offers ${JSON.stringify(query)} failed`, err);
       return [];
     }
   }
