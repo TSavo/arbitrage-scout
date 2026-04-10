@@ -71,11 +71,11 @@ export class ListingRepo implements IRepository<Listing, number> {
     const [row] = await db
       .insert(listings)
       .values({
+        ...data,
         marketplaceId,
         marketplaceListingId,
         firstSeenAt: now,
         lastSeenAt: now,
-        ...data,
       } as NewListing)
       .onConflictDoUpdate({
         target: [listings.marketplaceId, listings.marketplaceListingId],

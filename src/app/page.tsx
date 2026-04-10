@@ -1,65 +1,238 @@
-import Image from "next/image";
+export const dynamic = "force-dynamic";
 
-export default function Home() {
+import { db } from "@/db/client";
+import {
+  opportunities,
+  products,
+  scanLogs,
+  listings,
+  marketplaces,
+} from "@/db/schema";
+import { desc, eq, count, sql } from "drizzle-orm";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
+
+function fmt(n: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+function fmtPct(n: number) {
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+function timeAgo(ts: string | null | undefined) {
+  if (!ts) return "never";
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "new") return "default";
+  if (status === "reviewed") return "secondary";
+  if (status === "purchased") return "outline";
+  return "secondary";
+}
+
+export default async function DashboardPage() {
+  const [
+    statusCounts,
+    productCount,
+    lastScan,
+    recentOpps,
+  ] = await Promise.all([
+    db
+      .select({ status: opportunities.status, count: count() })
+      .from(opportunities)
+      .groupBy(opportunities.status),
+    db.select({ count: count() }).from(products),
+    db
+      .select({
+        startedAt: scanLogs.startedAt,
+        marketplaceId: scanLogs.marketplaceId,
+        opportunitiesFound: scanLogs.opportunitiesFound,
+        listingsFound: scanLogs.listingsFound,
+      })
+      .from(scanLogs)
+      .orderBy(desc(scanLogs.startedAt))
+      .limit(1),
+    db
+      .select({
+        id: opportunities.id,
+        listingPriceUsd: opportunities.listingPriceUsd,
+        marketPriceUsd: opportunities.marketPriceUsd,
+        profitUsd: opportunities.profitUsd,
+        marginPct: opportunities.marginPct,
+        status: opportunities.status,
+        foundAt: opportunities.foundAt,
+        flags: opportunities.flags,
+        listingTitle: listings.title,
+        marketplaceId: listings.marketplaceId,
+        marketplaceName: marketplaces.name,
+      })
+      .from(opportunities)
+      .innerJoin(listings, eq(opportunities.listingId, listings.id))
+      .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
+      .orderBy(desc(opportunities.foundAt))
+      .limit(5),
+  ]);
+
+  const byStatus = Object.fromEntries(
+    statusCounts.map((r) => [r.status, r.count])
+  );
+  const totalOpps = statusCounts.reduce((s, r) => s + r.count, 0);
+  const scan = lastScan[0];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="p-6 space-y-6">
+      <div>
+        <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
+        <p className="text-muted-foreground text-sm mt-0.5">
+          Collectibles arbitrage overview
+        </p>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Total Opportunities
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{totalOpps}</div>
+            <div className="flex gap-2 mt-2 flex-wrap">
+              <Badge variant="default" className="text-xs">
+                {byStatus["new"] ?? 0} new
+              </Badge>
+              <Badge variant="secondary" className="text-xs">
+                {byStatus["reviewed"] ?? 0} reviewed
+              </Badge>
+              <Badge variant="outline" className="text-xs">
+                {byStatus["purchased"] ?? 0} purchased
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Products in Catalog
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{productCount[0]?.count ?? 0}</div>
+            <p className="text-xs text-muted-foreground mt-2">Tracked items</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Last Scan
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {scan ? timeAgo(scan.startedAt) : "—"}
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {scan?.marketplaceId ?? "No scans yet"}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Last Scan Results
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">
+              {scan?.opportunitiesFound ?? "—"}
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {scan ? `${scan.listingsFound} listings scanned` : "No data"}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent opportunities */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">Recent Opportunities</h3>
+          <Link
+            href="/opportunities"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            View all →
+          </Link>
         </div>
-      </main>
+
+        {recentOpps.length === 0 ? (
+          <Card>
+            <CardContent className="py-10 text-center text-muted-foreground text-sm">
+              No opportunities found yet. Run a scan to get started.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {recentOpps.map((opp) => (
+              <Card key={opp.id} className="hover:bg-accent/30 transition-colors">
+                <CardContent className="py-3 px-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">
+                        {opp.listingTitle}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Badge variant="outline" className="text-xs">
+                          {opp.marketplaceName}
+                        </Badge>
+                        <Badge variant={statusVariant(opp.status)} className="text-xs">
+                          {opp.status}
+                        </Badge>
+                        {(opp.flags as string[]).map((flag) => (
+                          <Badge key={flag} variant="secondary" className="text-xs">
+                            {flag}
+                          </Badge>
+                        ))}
+                        <span className="text-xs text-muted-foreground">
+                          {timeAgo(opp.foundAt)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-mono text-green-400 font-semibold">
+                        {fmt(opp.profitUsd)}
+                      </p>
+                      <p className="text-xs text-muted-foreground font-mono">
+                        {fmtPct(opp.marginPct)} margin
+                      </p>
+                      <p className="text-xs text-muted-foreground font-mono mt-0.5">
+                        {fmt(opp.listingPriceUsd)} → {fmt(opp.marketPriceUsd)}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -10,8 +10,7 @@ import {
   pricePoints,
   scanLogs,
 } from "../db/schema";
-import type { RawListing } from "../sources/base_marketplace";
-import type { OllamaClient } from "../llm/ollama";
+import type { RawListing } from "../sources/IMarketplaceAdapter";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -45,8 +44,8 @@ export function upsertListing(
     .from(listings)
     .where(
       and(
-        eq(listings.marketplaceId, listing.marketplaceId),
-        eq(listings.marketplaceListingId, listing.listingId),
+        eq(listings.marketplaceId, listing.marketplace_id),
+        eq(listings.marketplaceListingId, listing.listing_id),
       ),
     )
     .limit(1)
@@ -55,25 +54,31 @@ export function upsertListing(
   if (existing) {
     db.update(listings)
       .set({
-        priceUsd: listing.priceUsd,
-        shippingUsd: listing.shippingUsd ?? 0,
+        priceUsd: listing.price_usd,
+        shippingUsd: listing.shipping_usd ?? 0,
         lastSeenAt: now,
         isActive: true,
       })
       .where(eq(listings.id, existing.id))
       .run();
-    return { ...existing, priceUsd: listing.priceUsd, shippingUsd: listing.shippingUsd ?? 0, lastSeenAt: now, isActive: true };
+    return {
+      ...existing,
+      priceUsd: listing.price_usd,
+      shippingUsd: listing.shipping_usd ?? 0,
+      lastSeenAt: now,
+      isActive: true,
+    };
   }
 
   const inserted = db
     .insert(listings)
     .values({
-      marketplaceId: listing.marketplaceId,
-      marketplaceListingId: listing.listingId,
+      marketplaceId: listing.marketplace_id,
+      marketplaceListingId: listing.listing_id,
       url: listing.url ?? null,
       title: listing.title,
-      priceUsd: listing.priceUsd,
-      shippingUsd: listing.shippingUsd ?? 0,
+      priceUsd: listing.price_usd,
+      shippingUsd: listing.shipping_usd ?? 0,
       seller: listing.seller ?? null,
       isLot,
       firstSeenAt: now,
@@ -173,16 +178,54 @@ export function finishScanLog(
 
 // ── LLM factory ───────────────────────────────────────────────────────
 
-export function buildLlm(
-  normCfg: Record<string, unknown>,
-): OllamaClient | null {
+export interface LlmClient {
+  generateJson(prompt: string, opts?: { system?: string }): Promise<unknown>;
+}
+
+/**
+ * Build an LLM client from the normalizer config section.
+ * Returns null if provider is not "ollama".
+ */
+export function buildLlm(normCfg: Record<string, unknown>): LlmClient | null {
   if (normCfg["provider"] !== "ollama") return null;
-  // Lazy import to avoid hard dep when not needed
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { OllamaClient: OC } = require("../llm/ollama") as { OllamaClient: new (opts: Record<string, unknown>) => OllamaClient };
-  return new OC({
-    baseUrl: (normCfg["base_url"] as string) ?? "http://battleaxe:11434",
-    model: (normCfg["model"] as string) ?? "qwen3:8b",
-    think: (normCfg["think"] as boolean) ?? false,
-  });
+
+  const baseUrl = (normCfg["base_url"] as string) ?? "http://battleaxe:11434";
+  const model = (normCfg["model"] as string) ?? "qwen3:8b";
+  const think = (normCfg["think"] as boolean) ?? false;
+
+  // Use the existing functional client in src/llm/client.ts, wrapping it.
+  return {
+    async generateJson(prompt: string, opts?: { system?: string }): Promise<unknown> {
+      const body: Record<string, unknown> = {
+        model,
+        prompt,
+        stream: false,
+        think,
+        options: { temperature: 0 },
+      };
+      if (opts?.system) body["system"] = opts.system;
+
+      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
+      }
+
+      const data = (await res.json()) as { response?: string };
+      const text = data.response;
+      if (typeof text !== "string") throw new Error("Unexpected Ollama response shape");
+
+      // Extract JSON from fenced or bare response
+      const trimmed = text.trim();
+      const fence = /```(?:json)?\s*([\s\S]+?)\s*```/i.exec(trimmed);
+      if (fence) return JSON.parse(fence[1].trim());
+      const obj = /(\{[\s\S]*\}|\[[\s\S]*\])/.exec(trimmed);
+      if (obj) return JSON.parse(obj[1]);
+      return JSON.parse(trimmed);
+    },
+  };
 }
