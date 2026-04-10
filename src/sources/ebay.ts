@@ -8,6 +8,7 @@
  */
 
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
+import { log, error } from "@/lib/logger";
 
 const PROD_API_BASE = "https://api.ebay.com";
 const SANDBOX_API_BASE = "https://api.sandbox.ebay.com";
@@ -62,9 +63,12 @@ export class EbayAdapter implements IMarketplaceAdapter {
   private async _getToken(): Promise<string> {
     const now = Date.now();
     if (this._cachedToken && now < this._cachedToken.expires_at) {
+      log("ebay", "OAuth token cache HIT");
       return this._cachedToken.access_token;
     }
 
+    log("ebay", `acquiring OAuth token from ${this._base}`);
+    const t0 = Date.now();
     const creds = Buffer.from(`${this._appId}:${this._certId}`).toString("base64");
     const res = await fetch(`${this._base}/identity/v1/oauth2/token`, {
       method: "POST",
@@ -79,6 +83,7 @@ export class EbayAdapter implements IMarketplaceAdapter {
     });
 
     if (!res.ok) {
+      error("ebay", `OAuth failed: ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
       throw new Error(`eBay OAuth failed: ${res.status} ${res.statusText}`);
     }
 
@@ -87,6 +92,7 @@ export class EbayAdapter implements IMarketplaceAdapter {
       access_token: data.access_token,
       expires_at: now + TOKEN_TTL_MS,
     };
+    log("ebay", `OAuth token acquired expires_in=${data.expires_in}s elapsed=${Date.now() - t0}ms`);
     return data.access_token;
   }
 
@@ -123,22 +129,28 @@ export class EbayAdapter implements IMarketplaceAdapter {
     query: string,
     options: { max_price?: number; limit?: number } = {},
   ): Promise<RawListing[]> {
-    if (this._rateLimited) return [];
+    if (this._rateLimited) {
+      log("ebay", `search skipped (rate limited): ${JSON.stringify(query)}`);
+      return [];
+    }
 
     const limit = options.limit ?? 25;
     const max_price = options.max_price;
 
+    log("ebay", `search query=${JSON.stringify(query)} limit=${limit}${max_price != null ? ` max_price=${max_price}` : ""}`);
     try {
       const items = await this._searchListings(query, { limit, max_price });
-      return items.map(_itemToRawListing).filter((x): x is RawListing => x !== null);
+      const listings = items.map(_itemToRawListing).filter((x): x is RawListing => x !== null);
+      log("ebay", `search "${query}" → ${listings.length} listings`);
+      return listings;
     } catch (err) {
       const msg = String(err);
       if (msg.includes("429")) {
-        console.warn("eBay rate limited");
+        error("ebay", "rate limited — pausing adapter");
         this._rateLimited = true;
         return [];
       }
-      console.warn(`eBay search ${JSON.stringify(query)} failed:`, err);
+      error("ebay", `search ${JSON.stringify(query)} failed`, err);
       return [];
     }
   }
@@ -172,36 +184,47 @@ export class EbayAdapter implements IMarketplaceAdapter {
     }
 
     const headers = await this._authHeaders();
+    const t0 = Date.now();
     const res = await fetch(
       `${this._base}/buy/browse/v1/item_summary/search?${params}`,
       { headers },
     );
 
     if (!res.ok) {
+      if (res.status === 429) error("ebay", `Browse API rate limited (429) elapsed=${Date.now() - t0}ms`);
       throw new Error(`eBay Browse API ${res.status}: ${res.statusText}`);
     }
 
     const data = (await res.json()) as { itemSummaries?: Record<string, unknown>[] };
-    return data.itemSummaries ?? [];
+    const items = data.itemSummaries ?? [];
+    log("ebay", `Browse API returned ${items.length} items elapsed=${Date.now() - t0}ms`);
+    return items;
   }
 
   /** Fetch full item description via Browse API getItem. */
   async getItemDescription(itemId: string): Promise<string | null> {
+    const t0 = Date.now();
+    log("ebay", `fetching description for itemId=${itemId}`);
     try {
       const headers = await this._authHeaders();
       const res = await fetch(
         `${this._base}/buy/browse/v1/item/v1|${itemId}|0`,
         { headers },
       );
-      if (!res.ok) return null;
+      if (!res.ok) {
+        error("ebay", `getItemDescription ${itemId} HTTP ${res.status} (${Date.now() - t0}ms)`);
+        return null;
+      }
       const data = (await res.json()) as Record<string, unknown>;
       let desc = (data.description as string | undefined) ??
         (data.shortDescription as string | undefined) ?? "";
       if (desc) {
         desc = desc.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
       }
+      log("ebay", `description ${itemId} len=${desc.length} elapsed=${Date.now() - t0}ms`);
       return desc || null;
-    } catch {
+    } catch (err) {
+      error("ebay", `getItemDescription ${itemId} failed`, err);
       return null;
     }
   }
@@ -212,6 +235,8 @@ export class EbayAdapter implements IMarketplaceAdapter {
 
   async searchSold(query: string, options: { limit?: number } = {}): Promise<SoldItem[]> {
     const limit = Math.min(options.limit ?? 100, 100);
+    log("ebay", `searchSold query=${JSON.stringify(query)} limit=${limit}`);
+    const t0 = Date.now();
     const encodedKw = encodeURIComponent(query);
     const url =
       `${FINDING_API_URL}` +
@@ -229,7 +254,7 @@ export class EbayAdapter implements IMarketplaceAdapter {
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        console.warn(`Finding API HTTP ${res.status} for q=${JSON.stringify(query)} (likely rate-limited)`);
+        error("ebay", `Finding API HTTP ${res.status} for ${JSON.stringify(query)} — likely rate-limited (${Date.now() - t0}ms)`);
         return [];
       }
       const data = (await res.json()) as Record<string, unknown>;
@@ -239,14 +264,16 @@ export class EbayAdapter implements IMarketplaceAdapter {
         const msg = errors.length
           ? ((errors[0] as Record<string, string[]>).message?.[0] ?? "unknown")
           : "unknown";
-        console.warn(`Finding API error: ${msg}`);
+        error("ebay", `Finding API error: ${msg}`);
         return [];
       }
 
       const items = _extractFindingItems(data);
-      return items.map(_findingItemToSold).filter((x): x is SoldItem => x !== null);
+      const sold = items.map(_findingItemToSold).filter((x): x is SoldItem => x !== null);
+      log("ebay", `searchSold "${query}" → ${sold.length} sold items elapsed=${Date.now() - t0}ms`);
+      return sold;
     } catch (err) {
-      console.warn(`Finding API request failed for q=${JSON.stringify(query)}:`, err);
+      error("ebay", `Finding API request failed for ${JSON.stringify(query)}`, err);
       return [];
     }
   }

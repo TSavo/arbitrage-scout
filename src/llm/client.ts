@@ -10,6 +10,8 @@
  *   OLLAMA_MODEL — default qwen3:8b
  */
 
+import { log, error } from "@/lib/logger";
+
 const DEFAULT_URL = process.env.OLLAMA_URL ?? "http://battleaxe:11434";
 const DEFAULT_MODEL = process.env.OLLAMA_MODEL ?? "qwen3:8b";
 const EMBED_MODEL = "qwen3-embedding:8b";
@@ -52,14 +54,18 @@ export async function generate(
   opts: GenerateOptions = {},
 ): Promise<string> {
   const baseUrl = DEFAULT_URL.replace(/\/$/, "");
+  const model = opts.model ?? DEFAULT_MODEL;
   const body: Record<string, unknown> = {
-    model: opts.model ?? DEFAULT_MODEL,
+    model,
     prompt,
     stream: false,
     think: false,
     options: { temperature: 0 },
   };
   if (opts.system) body.system = opts.system;
+
+  const t0 = Date.now();
+  log("llm/client", `generate model=${model} promptLen=${prompt.length} url=${baseUrl}`);
 
   const res = await fetch(`${baseUrl}/api/generate`, {
     method: "POST",
@@ -68,14 +74,17 @@ export async function generate(
   });
 
   if (!res.ok) {
+    error("llm/client", `generate failed: ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
     throw new OllamaError(`Ollama generate failed: ${res.status} ${res.statusText}`);
   }
 
   const data = (await res.json()) as Record<string, unknown>;
   const text = data["response"];
   if (typeof text !== "string") {
+    error("llm/client", `unexpected response shape after ${Date.now() - t0}ms`);
     throw new OllamaError(`Unexpected Ollama response shape: ${JSON.stringify(data)}`);
   }
+  log("llm/client", `generate OK responseLen=${text.length} elapsed=${Date.now() - t0}ms`);
   return text;
 }
 
@@ -104,6 +113,9 @@ export async function generateJson(
 export async function embed(text: string): Promise<number[]> {
   const baseUrl = DEFAULT_URL.replace(/\/$/, "");
 
+  const t0 = Date.now();
+  log("llm/client", `embed model=${EMBED_MODEL} inputLen=${text.length}`);
+
   const res = await fetch(`${baseUrl}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -111,13 +123,16 @@ export async function embed(text: string): Promise<number[]> {
   });
 
   if (!res.ok) {
+    error("llm/client", `embed failed: ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
     throw new OllamaError(`Ollama embed failed: ${res.status} ${res.statusText}`);
   }
 
   const data = (await res.json()) as { embeddings?: number[][] };
   const vec = data.embeddings?.[0];
   if (!vec) {
+    error("llm/client", `embed returned no vector after ${Date.now() - t0}ms`);
     throw new OllamaError(`Ollama embed returned no embeddings for input: ${text.slice(0, 80)}`);
   }
+  log("llm/client", `embed OK dim=${vec.length} elapsed=${Date.now() - t0}ms`);
   return vec;
 }

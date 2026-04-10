@@ -78,6 +78,36 @@ export async function processListing(
         confirmed: true,
         rawExtraction: { name: item.name, productType: item.productType, platform: item.platform, condition: item.condition, metadata: item.metadata },
       }).run();
+
+      // Embed this product if not already embedded (so future scans find it)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sqlite = (db as any).session?.client ?? (db as any)._session?.client;
+        if (sqlite) {
+          const { initEmbeddingCache, getOrComputeEmbedding } = require("../db/embedding_cache");
+          initEmbeddingCache(sqlite);
+          const vec = require("sqlite-vec");
+          vec.load(sqlite);
+          // Check if product already has an embedding
+          const existing = sqlite.prepare(
+            "SELECT COUNT(*) as c FROM product_embeddings WHERE product_id = ?"
+          ).get(match.productId) as { c: number };
+          if (existing.c === 0) {
+            const text = `${match.title} ${match.platform}`;
+            const embedding = getOrComputeEmbedding(sqlite, text);
+            if (embedding) {
+              const buf = Buffer.alloc(embedding.length * 4);
+              for (let k = 0; k < embedding.length; k++) buf.writeFloatLE(embedding[k], k * 4);
+              sqlite.prepare(
+                "INSERT OR IGNORE INTO product_embeddings(product_id, embedding) VALUES (?, ?)"
+              ).run(match.productId, buf);
+              log("processor", `embedded new product: ${match.title}`);
+            }
+          }
+        }
+      } catch {
+        // Non-critical — embedding will be generated in next batch job
+      }
     } else if (topCandidate) {
       // Rejected but had a candidate — store for review
       db.insert(listingItems).values({

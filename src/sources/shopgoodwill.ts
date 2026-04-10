@@ -9,6 +9,7 @@
 
 import { createCipheriv, createHash } from "crypto";
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
+import { log, error } from "@/lib/logger";
 
 const API_ROOT = "https://buyerapi.shopgoodwill.com/api";
 

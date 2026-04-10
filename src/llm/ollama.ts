@@ -13,6 +13,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { log, error } from "@/lib/logger";
 
 export const DEFAULT_BASE_URL = "http://battleaxe:11434";
 export const DEFAULT_MODEL = "qwen3:8b";
@@ -96,7 +97,13 @@ export class OllamaClient {
     const model = opts.model ?? this.model;
     const key = this.cacheKey(model, prompt, opts.system);
     const cached = this.readCache(key);
-    if (cached !== null) return cached;
+    if (cached !== null) {
+      log("ollama", `cache HIT model=${model} promptLen=${prompt.length} responseLen=${cached.length}`);
+      return cached;
+    }
+
+    log("ollama", `generate model=${model} promptLen=${prompt.length} url=${this.baseUrl}`);
+    const t0 = Date.now();
 
     const body: Record<string, unknown> = {
       model,
@@ -114,15 +121,18 @@ export class OllamaClient {
     });
 
     if (!res.ok) {
+      error("ollama", `generate failed: HTTP ${res.status} (${Date.now() - t0}ms)`);
       throw new OllamaError(`Ollama HTTP ${res.status}: ${await res.text()}`);
     }
 
     const data = (await res.json()) as { response?: string };
     const text = data.response;
     if (typeof text !== "string") {
+      error("ollama", `unexpected response shape after ${Date.now() - t0}ms`);
       throw new OllamaError(`Unexpected response shape: ${JSON.stringify(data)}`);
     }
 
+    log("ollama", `generate OK responseLen=${text.length} elapsed=${Date.now() - t0}ms (writing cache)`);
     this.writeCache(key, text);
     return text;
   }

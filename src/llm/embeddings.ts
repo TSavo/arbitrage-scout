@@ -10,6 +10,7 @@
 
 import { sqlite } from "../db/client";
 import { embed } from "./client";
+import { log, error } from "@/lib/logger";
 
 const EMBEDDING_DIM = 4096;
 
@@ -64,6 +65,7 @@ export function initVecTable(db: typeof sqlite): void {
     `CREATE VIRTUAL TABLE IF NOT EXISTS product_embeddings ` +
       `USING vec0(product_id TEXT PRIMARY KEY, embedding float[${EMBEDDING_DIM}])`,
   );
+  log("embeddings", `product_embeddings vec0 table ready (dim=${EMBEDDING_DIM})`);
 }
 
 export interface EmbedProductsOpts {
@@ -104,6 +106,7 @@ export async function embedProducts(
     .all() as Array<{ id: string; title: string; platform: string | null }>;
 
   const toEmbed = allProducts.filter((p) => !existing.has(p.id));
+  log("embeddings", `${existing.size} already cached, ${toEmbed.length} to embed (total products: ${allProducts.length})`);
   if (toEmbed.length === 0) return 0;
 
   const insert = db.prepare(
@@ -111,9 +114,13 @@ export async function embedProducts(
   );
 
   let embedded = 0;
+  const totalBatches = Math.ceil(toEmbed.length / batchSize);
 
   for (let i = 0; i < toEmbed.length; i += batchSize) {
     const batch = toEmbed.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    log("embeddings", `batch ${batchNum}/${totalBatches} — embedding ${batch.length} products`);
+    const t0 = Date.now();
 
     const insertMany = db.transaction(
       (rows: Array<{ id: string; vec: Buffer }>) => {
@@ -131,16 +138,18 @@ export async function embedProducts(
         const vec = await embed(text);
         results.push({ id: product.id, vec: floatsToBuffer(vec) });
       } catch (err) {
-        console.warn(`[embeddings] failed to embed product ${product.id}: ${String(err)}`);
+        error("embeddings", `failed to embed product ${product.id}`, err);
       }
     }
 
     if (results.length > 0) {
       insertMany(results);
       embedded += results.length;
+      log("embeddings", `batch ${batchNum}/${totalBatches} stored ${results.length} vectors elapsed=${Date.now() - t0}ms`);
     }
   }
 
+  log("embeddings", `embedProducts complete: ${embedded} newly embedded`);
   return embedded;
 }
 
@@ -168,6 +177,8 @@ export async function searchSimilar(
 
   loadVec();
 
+  log("embeddings", `searchSimilar query="${query.slice(0, 60)}" limit=${limit}`);
+  const t0 = Date.now();
   const queryVec = await embed(query);
   const queryBuf = floatsToBuffer(queryVec);
 
@@ -187,6 +198,7 @@ export async function searchSimilar(
     distance: number;
   }>;
 
+  log("embeddings", `searchSimilar found ${rows.length} results elapsed=${Date.now() - t0}ms`);
   return rows.map((r) => ({
     productId: r.product_id,
     title: r.title,

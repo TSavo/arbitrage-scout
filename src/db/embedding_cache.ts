@@ -4,7 +4,7 @@
  */
 
 import { createHash } from "crypto";
-import { log } from "@/lib/logger";
+import { log, error } from "@/lib/logger";
 
 const EMBEDDING_DIM = 4096;
 
@@ -73,6 +73,7 @@ export function getOrComputeEmbedding(
 
   // Cache miss — compute via Ollama
   log("embedding", `cache MISS: "${text.slice(0, 50)}..." — calling Ollama`);
+  const t0 = Date.now();
   try {
     const { execSync } = require("child_process");
     const result = execSync(
@@ -84,12 +85,17 @@ export function getOrComputeEmbedding(
     );
     const parsed = JSON.parse(result);
     const vec = parsed.embeddings?.[0];
-    if (!vec || !vec.length) return null;
+    if (!vec || !vec.length) {
+      error("embedding", `Ollama returned no vector after ${Date.now() - t0}ms`);
+      return null;
+    }
 
     // Store in cache
     cacheEmbedding(sqlite, text, vec);
+    log("embedding", `computed + cached dim=${vec.length} elapsed=${Date.now() - t0}ms`);
     return vec;
-  } catch {
+  } catch (err) {
+    error("embedding", `Ollama call failed after ${Date.now() - t0}ms`, err);
     return null;
   }
 }

@@ -23,6 +23,7 @@ const navLinks = [
   { href: "/opportunities", label: "Opportunities", icon: "◆" },
   { href: "/products", label: "Products", icon: "◈" },
   { href: "/scans", label: "Scans", icon: "◎" },
+  { href: "/platforms", label: "Platforms", icon: "◇" },
 ];
 
 export default function RootLayout({
