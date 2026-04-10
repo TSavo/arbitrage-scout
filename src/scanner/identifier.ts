@@ -305,17 +305,11 @@ function searchEmbeddings(
     const vec = require("sqlite-vec");
     vec.load(sqlite);
 
-    // Embed the query synchronously via Ollama
+    // Get or compute embedding (cached)
+    const { initEmbeddingCache, getOrComputeEmbedding } = require("../db/embedding_cache");
+    initEmbeddingCache(sqlite);
     const ollamaUrl = process.env.OLLAMA_URL || "http://battleaxe:11434";
-    const resp = new URL("/api/embed", ollamaUrl);
-    // Use sync XMLHttpRequest... no, use execSync
-    const { execSync } = require("child_process");
-    const result = execSync(
-      `curl -s -X POST ${ollamaUrl}/api/embed -d '${JSON.stringify({ model: "qwen3-embedding:8b", input: query }).replace(/'/g, "'\\''")}'`,
-      { encoding: "utf8", timeout: 30000 },
-    );
-    const parsed = JSON.parse(result);
-    const vec_data = parsed.embeddings?.[0];
+    const vec_data = getOrComputeEmbedding(sqlite, query, ollamaUrl);
     if (!vec_data || !vec_data.length) return [];
 
     // Pack floats to buffer
