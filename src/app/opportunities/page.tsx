@@ -11,48 +11,7 @@ import { desc, eq } from "drizzle-orm";
 import { OpportunitiesTable, type OpportunityRow } from "./OpportunitiesTable";
 
 export default async function OpportunitiesPage() {
-  const rows = await db
-    .select({
-      id: opportunities.id,
-      listingPriceUsd: opportunities.listingPriceUsd,
-      marketPriceUsd: opportunities.marketPriceUsd,
-      profitUsd: opportunities.profitUsd,
-      marginPct: opportunities.marginPct,
-      status: opportunities.status,
-      flags: opportunities.flags,
-      foundAt: opportunities.foundAt,
-      confidence: opportunities.confidence,
-      feesUsd: opportunities.feesUsd,
-      marketPriceCondition: opportunities.marketPriceCondition,
-      marketPriceSource: opportunities.marketPriceSource,
-      listingTitle: listings.title,
-      url: listings.url,
-      marketplaceName: marketplaces.name,
-    })
-    .from(opportunities)
-    .innerJoin(listings, eq(opportunities.listingId, listings.id))
-    .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
-    .orderBy(desc(opportunities.foundAt))
-    .limit(500);
-
-  // Fetch condition for first listing item per opportunity
-  const itemConditions = await db
-    .select({
-      listingId: listingItems.listingId,
-      condition: listingItems.condition,
-    })
-    .from(listingItems);
-
-  const conditionByListing = new Map(
-    itemConditions.map((i) => [i.listingId, i.condition])
-  );
-
-  // Get listing IDs from opportunities
-  const listingIds = await db
-    .select({ id: listings.id, marketplaceId: listings.marketplaceId })
-    .from(listings);
-
-  // Join listing ID back to opportunity by joining directly
+  // Main opportunity rows with listing and marketplace info
   const fullRows = await db
     .select({
       id: opportunities.id,
@@ -77,6 +36,18 @@ export default async function OpportunitiesPage() {
     .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
     .orderBy(desc(opportunities.foundAt))
     .limit(500);
+
+  // Fetch condition per listing from listing_items
+  const itemConditions = await db
+    .select({
+      listingId: listingItems.listingId,
+      condition: listingItems.condition,
+    })
+    .from(listingItems);
+
+  const conditionByListing = new Map(
+    itemConditions.map((i) => [i.listingId, i.condition])
+  );
 
   const tableRows: OpportunityRow[] = fullRows.map((r) => ({
     id: r.id,
