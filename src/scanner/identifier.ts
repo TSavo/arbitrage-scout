@@ -273,6 +273,69 @@ function searchFts(
 }
 
 /**
+ * Search products by vector embedding similarity.
+ * Returns candidates ordered by distance (lowest = most similar).
+ */
+function searchEmbeddings(
+  db: Db,
+  query: string,
+  limit: number,
+): Array<{ productId: string; title: string; platform: string; distance: number }> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sqlite = (db as any).session?.client ?? (db as any)._session?.client;
+    if (!sqlite) return [];
+
+    // Load sqlite-vec extension
+    const vec = require("sqlite-vec");
+    vec.load(sqlite);
+
+    // Embed the query synchronously via Ollama
+    const ollamaUrl = process.env.OLLAMA_URL || "http://battleaxe:11434";
+    const resp = new URL("/api/embed", ollamaUrl);
+    // Use sync XMLHttpRequest... no, use execSync
+    const { execSync } = require("child_process");
+    const result = execSync(
+      `curl -s -X POST ${ollamaUrl}/api/embed -d '${JSON.stringify({ model: "qwen3-embedding:8b", input: query }).replace(/'/g, "'\\''")}'`,
+      { encoding: "utf8", timeout: 30000 },
+    );
+    const parsed = JSON.parse(result);
+    const vec_data = parsed.embeddings?.[0];
+    if (!vec_data || !vec_data.length) return [];
+
+    // Pack floats to buffer
+    const buf = Buffer.alloc(vec_data.length * 4);
+    for (let i = 0; i < vec_data.length; i++) {
+      buf.writeFloatLE(vec_data[i], i * 4);
+    }
+
+    const rows = sqlite
+      .prepare(
+        `SELECT pe.product_id, p.title, p.platform, pe.distance
+         FROM product_embeddings pe
+         JOIN products p ON p.id = pe.product_id
+         WHERE pe.embedding MATCH ? AND k = ?
+         ORDER BY pe.distance`,
+      )
+      .all(buf, limit) as Array<{
+      product_id: string;
+      title: string;
+      platform: string;
+      distance: number;
+    }>;
+
+    return rows.map((r) => ({
+      productId: r.product_id,
+      title: r.title,
+      platform: r.platform,
+      distance: r.distance,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * For each extracted item, search the catalog using FTS5.
  *
  * Uses SQLite full-text search for millisecond-level matching against
@@ -342,7 +405,41 @@ export function matchCandidates(
       }
     }
 
-    // Fallback: difflib-style scoring (slow path — only if FTS failed)
+    // Try embeddings (semantic search — catches typos, abbreviations)
+    if (candidates.length < topN) {
+      try {
+        const vecCandidates = searchEmbeddings(db, searchTerms, topN * 2);
+        for (const vc of vecCandidates) {
+          // Skip if already found by FTS5
+          if (candidates.some((c) => c.productId === vc.productId)) continue;
+          // Get price
+          const row = db
+            .select({ priceUsd: pricePoints.priceUsd })
+            .from(pricePoints)
+            .where(
+              and(eq(pricePoints.productId, vc.productId), eq(pricePoints.condition, "loose")),
+            )
+            .orderBy(desc(pricePoints.recordedAt))
+            .limit(1)
+            .all()[0];
+          if (row && row.priceUsd > 2) {
+            // Convert distance (0=identical, 2=opposite) to score (1=best, 0=worst)
+            const score = Math.max(0, 1.0 - vc.distance / 2);
+            candidates.push({
+              productId: vc.productId,
+              title: vc.title,
+              platform: vc.platform,
+              loosePrice: row.priceUsd,
+              score,
+            });
+          }
+        }
+      } catch {
+        // Embeddings not available — that's fine
+      }
+    }
+
+    // Fallback: difflib-style scoring (slow path — only if nothing else worked)
     if (!candidates.length) {
       const catalog = db
         .select({
