@@ -163,6 +163,10 @@ export const listingItems = sqliteTable(
       .default({}),
     estimatedValueUsd: real("estimated_value_usd"),
     confidence: real("confidence").notNull().default(0),
+    confirmed: integer("confirmed", { mode: "boolean" }).notNull().default(false),
+    rawExtraction: text("raw_extraction", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .default({}),
   },
   (table) => [
     index("ix_listing_items_listing").on(table.listingId),

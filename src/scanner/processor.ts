@@ -11,7 +11,7 @@ import { listingItems, opportunities, products } from "../db/schema";
 import type { LlmClient } from "./helpers";
 import type { RawListing } from "../sources/IMarketplaceAdapter";
 import { upsertListing, getMarketPrice } from "./helpers";
-import { identifyAndMatch } from "./identifier";
+import { extractItems, matchCandidates, confirmMatches, identifyAndMatch } from "./identifier";
 import { log, hit, verify, skip } from "@/lib/logger";
 
 export type Db = BetterSQLite3Database<typeof schema>;
@@ -41,9 +41,60 @@ export async function processListing(
     return processKnownProduct(db, listing, pcProductId, minProfit, minMargin);
   }
 
-  // Three-stage: extract items → FTS5 match catalog → LLM confirms
+  // Three-stage: extract → match → confirm
   log("processor", `three-stage path: extract → match → confirm`);
-  const matches = await identifyAndMatch(listing, llm, db);
+
+  // Stage 1: Extract items from listing
+  const extracted = await extractItems(listing, llm, db);
+  if (!extracted.length) {
+    skip("processor", `no items extracted from "${titleShort}"`);
+    return 0;
+  }
+
+  // Stage 2: Match candidates from catalog
+  const candidates = matchCandidates(extracted, db);
+
+  // Stage 3: LLM confirms
+  const confirmed = await confirmMatches(extracted, candidates, llm, db, listing.price_usd, listing.marketplace_id);
+
+  // Get the DB listing for storing items
+  const dbListing = upsertListing(db, listing, extracted.length > 1);
+
+  // Store ALL extracted items — confirmed AND rejected
+  for (let i = 0; i < extracted.length; i++) {
+    const item = extracted[i];
+    const match = confirmed[i];
+    const topCandidate = candidates.get(i)?.[0];
+
+    if (match) {
+      // Confirmed match — store with product link
+      db.insert(listingItems).values({
+        listingId: dbListing.id,
+        productId: match.productId,
+        condition: match.condition,
+        conditionDetails: match.details,
+        estimatedValueUsd: match.marketPrice,
+        confidence: match.confidence,
+        confirmed: true,
+        rawExtraction: { name: item.name, productType: item.productType, platform: item.platform, condition: item.condition, metadata: item.metadata },
+      }).run();
+    } else if (topCandidate) {
+      // Rejected but had a candidate — store for review
+      db.insert(listingItems).values({
+        listingId: dbListing.id,
+        productId: topCandidate.productId,
+        condition: item.condition,
+        conditionDetails: item.metadata,
+        estimatedValueUsd: topCandidate.loosePrice,
+        confidence: topCandidate.score,
+        confirmed: false,
+        rawExtraction: { name: item.name, productType: item.productType, platform: item.platform, condition: item.condition, metadata: item.metadata, rejected: true },
+      }).run();
+    }
+  }
+
+  // Create opportunities for confirmed matches above threshold
+  const matches = confirmed.filter((m): m is NonNullable<typeof m> => m !== null);
   if (!matches.length) {
     skip("processor", `no confirmed matches for "${titleShort}"`);
     return 0;
@@ -54,7 +105,6 @@ export async function processListing(
   const itemCount = matches.length;
 
   for (const match of matches) {
-    // Get condition-matched price
     let condPrice = getMarketPrice(db, match.productId, match.condition);
     if (condPrice === null) condPrice = match.marketPrice;
     if (condPrice === null || condPrice <= 0) {
@@ -70,19 +120,6 @@ export async function processListing(
       skip("processor", `below threshold: ${match.title} profit=$${profit.toFixed(2)} margin=${(margin * 100).toFixed(0)}% (min $${minProfit}/${(minMargin * 100).toFixed(0)}%)`);
       continue;
     }
-
-    const dbListing = upsertListing(db, listing, itemCount > 1);
-
-    db.insert(listingItems)
-      .values({
-        listingId: dbListing.id,
-        productId: match.productId,
-        condition: match.condition,
-        conditionDetails: match.details,
-        estimatedValueUsd: condPrice,
-        confidence: match.confidence,
-      })
-      .run();
 
     const flags: string[] = [];
     if ((listing.num_bids ?? 0) > 0) flags.push("auction_may_increase");
