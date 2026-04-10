@@ -31,15 +31,15 @@ export async function processListing(
   const titleShort = listing.title.length > 60 ? listing.title.slice(0, 57) + "..." : listing.title;
   log("processor", `processing: "${titleShort}" @ $${listing.price_usd.toFixed(2)} [${listing.marketplace_id}/${listing.listing_id}]`);
 
+  // Store every listing we see, regardless of whether it's a deal
+  upsertListing(db, listing);
+
   // Fast path for PriceCharting offers (product ID already known)
   const pcProductId = (listing.extra ?? {})["pc_product_id"] as string | undefined;
   if (pcProductId) {
     log("processor", `fast path: known PriceCharting product id=${pcProductId}`);
     return processKnownProduct(db, listing, pcProductId, minProfit, minMargin);
   }
-
-  // Store every listing we see, regardless of whether it's a deal
-  upsertListing(db, listing);
 
   // Three-stage: extract items → FTS5 match catalog → LLM confirms
   log("processor", `three-stage path: extract → match → confirm`);
