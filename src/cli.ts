@@ -84,8 +84,16 @@ async function main() {
     });
     log("cli", `${deals.length} cross-marketplace deals`);
     sqlite.close();
+  } else if (command === "platforms") {
+    section("PLATFORMS — Undervalued platform analysis");
+    const Database = require("better-sqlite3");
+    const dbPath = process.env.DB_PATH || "data/scout-v2.db";
+    const sqlite = new Database(dbPath);
+    const { findUndervaluedPlatforms } = require("./scanner/platforms");
+    findUndervaluedPlatforms(sqlite);
+    sqlite.close();
   } else {
-    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage]");
+    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms]");
     process.exit(1);
   }
 }
