@@ -38,6 +38,9 @@ export async function processListing(
     return processKnownProduct(db, listing, pcProductId, minProfit, minMargin);
   }
 
+  // Store every listing we see, regardless of whether it's a deal
+  upsertListing(db, listing);
+
   // Three-stage: extract items → FTS5 match catalog → LLM confirms
   log("processor", `three-stage path: extract → match → confirm`);
   const matches = await identifyAndMatch(listing, llm, db);

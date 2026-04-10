@@ -30,6 +30,11 @@ function openDb(dbPath: string) {
   const sqlite = new Database(resolve(dbPath));
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
+
+  // Initialize embedding cache table
+  const { initEmbeddingCache } = require("../db/embedding_cache");
+  initEmbeddingCache(sqlite);
+
   const db = drizzle(sqlite, { schema });
   return { db, sqlite };
 }
@@ -43,6 +48,7 @@ function seedMarketplaces(
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
+    { id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
   ];
   for (const mp of defaults) {
