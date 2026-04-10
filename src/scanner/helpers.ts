@@ -11,6 +11,7 @@ import {
   scanLogs,
 } from "../db/schema";
 import type { RawListing } from "../sources/IMarketplaceAdapter";
+import { log } from "@/lib/logger";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -52,6 +53,7 @@ export function upsertListing(
     .all()[0];
 
   if (existing) {
+    log("helpers", `listing upsert: UPDATE id=${existing.id} [${listing.marketplace_id}/${listing.listing_id}] price=$${listing.price_usd.toFixed(2)}`);
     db.update(listings)
       .set({
         priceUsd: listing.price_usd,
@@ -88,6 +90,7 @@ export function upsertListing(
     .returning()
     .get();
 
+  log("helpers", `listing upsert: INSERT id=${inserted.id} [${listing.marketplace_id}/${listing.listing_id}]${isLot ? " [lot]" : ""} price=$${listing.price_usd.toFixed(2)}`);
   return inserted;
 }
 
@@ -115,7 +118,10 @@ export function getMarketPrice(
     .limit(1)
     .all()[0];
 
-  if (row) return row.priceUsd;
+  if (row) {
+    log("helpers", `market price: product=${productId} condition=${condition} price=$${row.priceUsd.toFixed(2)}`);
+    return row.priceUsd;
+  }
 
   // Fall back to loose
   if (condition !== "loose") {
@@ -132,9 +138,15 @@ export function getMarketPrice(
       .limit(1)
       .all()[0];
 
+    if (fallback) {
+      log("helpers", `market price: product=${productId} condition=${condition} not found, fallback loose=$${fallback.priceUsd.toFixed(2)}`);
+    } else {
+      log("helpers", `market price: product=${productId} no price found for ${condition} or loose`);
+    }
     return fallback?.priceUsd ?? null;
   }
 
+  log("helpers", `market price: product=${productId} condition=loose not found`);
   return null;
 }
 

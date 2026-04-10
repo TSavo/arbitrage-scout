@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import type { IMarketplaceAdapter, RawListing } from "../sources/IMarketplaceAdapter";
 import { cfg, startScanLog, finishScanLog, buildLlm } from "./helpers";
 import { processListing } from "./processor";
+import { log, section, progress, skip, error } from "@/lib/logger";
 
 type Config = Record<string, unknown>;
 
@@ -86,68 +87,76 @@ export async function runScan(
 
   for (const adapter of adapters) {
     if (!adapter.isAvailable()) {
-      console.log(`\n${adapter.marketplace_id}: unavailable, skipping`);
+      skip("scan", `${adapter.marketplace_id}: adapter unavailable, skipping`);
       continue;
     }
 
-    console.log(`\n${adapter.marketplace_id}`);
+    section(`${adapter.marketplace_id.toUpperCase()} SCAN`);
 
     // Start scan log
     const scanLogId = startScanLog(db, adapter.marketplace_id);
 
     // Discover inventory
     const queries = adapter.discoveryQueries();
+    log("scan", `${adapter.marketplace_id}: running ${queries.length} discovery queries`);
     const allListings: RawListing[] = [];
     const seenIds = new Set<string>();
 
-    for (const query of queries) {
+    for (let qi = 0; qi < queries.length; qi++) {
+      const query = queries[qi];
+      log("scan", `query [${qi + 1}/${queries.length}]: "${query}"`);
       const results = await adapter.search(query, { limit: 40 });
+      let newThisQuery = 0;
       for (const listing of results) {
         if (!seenIds.has(listing.listing_id)) {
           seenIds.add(listing.listing_id);
           allListings.push(listing);
+          newThisQuery++;
         }
       }
-      if (!adapter.isAvailable()) break; // rate limited
+      log("scan", `  → ${results.length} results, ${newThisQuery} new unique listings (${allListings.length} total)`);
+      if (!adapter.isAvailable()) {
+        error("scan", `${adapter.marketplace_id}: rate limit detected after query ${qi + 1}/${queries.length}`);
+        break; // rate limited
+      }
     }
 
     if (!allListings.length) {
-      console.log(`  0 listings found`);
+      log("scan", `${adapter.marketplace_id}: 0 listings found`);
       finishScanLog(db, scanLogId, queries.length, 0, 0, !adapter.isAvailable());
       continue;
     }
 
-    console.log(
-      `  ${allListings.length} unique listings from ${queries.length} queries`,
-    );
+    log("scan", `${adapter.marketplace_id}: ${allListings.length} unique listings from ${queries.length} queries — processing...`);
 
     // Process each listing: identify → match → price → opportunity
     let nOpps = 0;
     for (let i = 0; i < allListings.length; i++) {
       const listing = allListings[i];
-      process.stdout.write(
-        `\r  [${i + 1}/${allListings.length}] ${adapter.marketplace_id}...`,
-      );
+      progress(i + 1, allListings.length, `${adapter.marketplace_id} listings`);
       const opps = await processListing(db, llm, listing, minProfit, minMargin);
       nOpps += opps;
     }
-    process.stdout.write("\n");
 
+    const rateLimited = !adapter.isAvailable();
     finishScanLog(
       db,
       scanLogId,
       queries.length,
       allListings.length,
       nOpps,
-      !adapter.isAvailable(),
+      rateLimited,
     );
     totalOpportunities += nOpps;
+
+    log("scan", `${adapter.marketplace_id} summary: ${queries.length} queries, ${allListings.length} listings, ${nOpps} opportunities${rateLimited ? " [RATE LIMITED]" : ""}`);
 
     if ("close" in adapter && typeof (adapter as { close?: () => void }).close === "function") {
       (adapter as { close: () => void }).close();
     }
   }
 
-  console.log(`\n${totalOpportunities} total opportunities\n`);
+  section("SCAN COMPLETE");
+  log("scan", `total opportunities found: ${totalOpportunities}`);
   return totalOpportunities;
 }

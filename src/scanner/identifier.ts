@@ -15,6 +15,7 @@ import * as schema from "../db/schema";
 import { products, productTypes, pricePoints } from "../db/schema";
 import type { LlmClient } from "./helpers";
 import type { RawListing } from "../sources/IMarketplaceAdapter";
+import { log, skip, error } from "@/lib/logger";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -131,6 +132,7 @@ export async function extractItems(
       ? `Title: "${listing}"`
       : buildListingContext(listing);
 
+  log("identifier/s1", `extracting items from listing`);
   try {
     const result = await llm.generateJson(
       `## Marketplace listing\n\n${listingContext}\n\n` +
@@ -179,11 +181,17 @@ export async function extractItems(
       },
     );
 
-    if (!result || typeof result !== "object" || Array.isArray(result)) return [];
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      skip("identifier/s1", "LLM returned non-object or null");
+      return [];
+    }
     const items = (result as Record<string, unknown>)["items"];
-    if (!Array.isArray(items)) return [];
+    if (!Array.isArray(items)) {
+      skip("identifier/s1", "LLM response missing items array");
+      return [];
+    }
 
-    return items
+    const extracted = items
       .filter(
         (i): i is Record<string, unknown> =>
           i !== null &&
@@ -200,7 +208,14 @@ export async function extractItems(
         metadata: (i["metadata"] as Record<string, unknown>) ?? {},
         quantity: typeof i["quantity"] === "number" ? (i["quantity"] as number) : 1,
       }));
-  } catch {
+
+    log("identifier/s1", `extracted ${extracted.length} item(s):`);
+    for (const item of extracted) {
+      log("identifier/s1", `  "${item.name}" type=${item.productType} platform=${item.platform || "(none)"} condition=${item.condition} qty=${item.quantity}`);
+    }
+    return extracted;
+  } catch (err) {
+    error("identifier/s1", "LLM extraction failed", err);
     return [];
   }
 }
@@ -359,11 +374,13 @@ export function matchCandidates(
       ? `${item.name} ${item.platform}`
       : item.name;
 
+    log("identifier/s2", `item [${idx + 1}/${extracted.length}]: searching catalog for "${searchTerms}"`);
     let candidates: CatalogCandidate[] = [];
 
     // Try FTS5 first (fast path)
     const ftsResults = searchFts(db, searchTerms, item.productType, topN * 3);
     if (ftsResults.length) {
+      log("identifier/s2", `FTS5 returned ${ftsResults.length} raw results for "${searchTerms}"`);
       // Get prices for FTS results
       const priceMap = new Map<string, number>();
       for (const r of ftsResults) {
@@ -403,12 +420,17 @@ export function matchCandidates(
           score,
         });
       }
+    } else {
+      log("identifier/s2", `FTS5 found no results for "${searchTerms}"`);
     }
 
     // Try embeddings (semantic search — catches typos, abbreviations)
     if (candidates.length < topN) {
+      log("identifier/s2", `FTS5 yielded only ${candidates.length} candidates (< topN ${topN}), trying embeddings`);
       try {
         const vecCandidates = searchEmbeddings(db, searchTerms, topN * 2);
+        log("identifier/s2", `embeddings returned ${vecCandidates.length} result(s)`);
+        let addedFromVec = 0;
         for (const vc of vecCandidates) {
           // Skip if already found by FTS5
           if (candidates.some((c) => c.productId === vc.productId)) continue;
@@ -432,15 +454,19 @@ export function matchCandidates(
               loosePrice: row.priceUsd,
               score,
             });
+            addedFromVec++;
           }
         }
+        log("identifier/s2", `embeddings added ${addedFromVec} new candidates`);
       } catch {
         // Embeddings not available — that's fine
+        log("identifier/s2", `embeddings unavailable, skipping`);
       }
     }
 
     // Fallback: difflib-style scoring (slow path — only if nothing else worked)
     if (!candidates.length) {
+      log("identifier/s2", `FTS5 + embeddings found nothing, falling back to difflib scan (slow)`);
       const catalog = db
         .select({
           id: products.id,
@@ -471,10 +497,18 @@ export function matchCandidates(
           });
         }
       }
+      log("identifier/s2", `difflib found ${candidates.length} candidate(s) for "${searchTerms}"`);
     }
 
     candidates.sort((a, b) => b.score - a.score);
-    results.set(idx, candidates.slice(0, topN));
+    const topCandidates = candidates.slice(0, topN);
+    if (topCandidates.length) {
+      const best = topCandidates[0];
+      log("identifier/s2", `${topCandidates.length} candidate(s) for "${item.name}"; top: "${best.title}" (${best.platform}) score=${best.score.toFixed(2)} $${best.loosePrice.toFixed(2)}`);
+    } else {
+      log("identifier/s2", `no candidates found for "${item.name}"`);
+    }
+    results.set(idx, topCandidates);
   }
 
   return results;
@@ -499,9 +533,11 @@ export async function confirmMatches(
 ): Promise<Array<ConfirmedMatch | null>> {
   // No LLM: use best candidate if score >= 0.7
   if (!llm) {
+    log("identifier/s3", `no LLM — auto-confirming candidates with score >= 0.7`);
     return extracted.map((item, i) => {
       const cands = candidates.get(i) ?? [];
       if (cands.length && cands[0].score >= 0.7) {
+        log("identifier/s3", `auto-confirm item ${i + 1}: "${cands[0].title}" score=${cands[0].score.toFixed(2)}`);
         return {
           productId: cands[0].productId,
           title: cands[0].title,
@@ -512,6 +548,7 @@ export async function confirmMatches(
           details: {},
         };
       }
+      log("identifier/s3", `auto-reject item ${i + 1}: "${item.name}" — no candidate scored >= 0.7`);
       return null;
     });
   }
@@ -594,6 +631,8 @@ export async function confirmMatches(
     '{"matches": [{"item": 1, "choice": "A", "condition": "condition_value"}, ...]}\n' +
     "Use null for choice if no match.";
 
+  log("identifier/s3", `LLM confirmation: ${extracted.length} item(s), ${[...candidates.values()].reduce((s, v) => s + v.length, 0)} total candidates`);
+
   try {
     const result = await llm.generateJson(prompt, {
       system:
@@ -607,12 +646,17 @@ export async function confirmMatches(
     });
 
     if (!result || typeof result !== "object" || Array.isArray(result)) {
+      log("identifier/s3", `LLM returned invalid response shape`);
       return new Array<null>(extracted.length).fill(null);
     }
 
     const matchesRaw = (result as Record<string, unknown>)["matches"];
-    if (!Array.isArray(matchesRaw)) return new Array<null>(extracted.length).fill(null);
+    if (!Array.isArray(matchesRaw)) {
+      log("identifier/s3", `LLM response missing matches array`);
+      return new Array<null>(extracted.length).fill(null);
+    }
 
+    log("identifier/s3", `LLM returned ${matchesRaw.length} match decision(s)`);
     const out: Array<ConfirmedMatch | null> = new Array(extracted.length).fill(null);
 
     for (const m of matchesRaw as Array<Record<string, unknown>>) {
@@ -623,17 +667,23 @@ export async function confirmMatches(
       if (idx < 0 || idx >= extracted.length) continue;
       const cands = candidates.get(idx) ?? [];
       // null choice or "None of these" letter
-      if (choice === null || choice === undefined) continue;
+      if (choice === null || choice === undefined) {
+        log("identifier/s3", `item ${idx + 1} ("${extracted[idx].name}"): LLM rejected (null choice)`);
+        continue;
+      }
       if (
         typeof choice === "string" &&
         choice.toUpperCase() === String.fromCharCode(65 + cands.length)
-      )
+      ) {
+        log("identifier/s3", `item ${idx + 1} ("${extracted[idx].name}"): LLM chose "None of these"`);
         continue;
+      }
 
       const candIdx =
         typeof choice === "string" ? choice.toUpperCase().charCodeAt(0) - 65 : -1;
       if (candIdx >= 0 && candIdx < cands.length) {
         const c = cands[candIdx];
+        log("identifier/s3", `item ${idx + 1} ("${extracted[idx].name}"): LLM confirmed → "${c.title}" (${c.platform}) [${condition}] score=${c.score.toFixed(2)} $${c.loosePrice.toFixed(2)}`);
         out[idx] = {
           productId: c.productId,
           title: c.title,
@@ -643,11 +693,18 @@ export async function confirmMatches(
           confidence: c.score,
           details: extracted[idx].metadata,
         };
+      } else {
+        log("identifier/s3", `item ${idx + 1} ("${extracted[idx].name}"): LLM choice "${choice}" invalid`);
       }
     }
 
+    const nConfirmed = out.filter(Boolean).length;
+    const nRejected = out.length - nConfirmed;
+    log("identifier/s3", `stage 3 result: ${nConfirmed} confirmed, ${nRejected} rejected`);
+
     return out;
-  } catch {
+  } catch (err) {
+    error("identifier/s3", "LLM confirmation failed", err);
     return new Array<null>(extracted.length).fill(null);
   }
 }
@@ -667,11 +724,20 @@ export async function identifyAndMatch(
 ): Promise<ConfirmedMatch[]> {
   // Stage 1: Extract (uses full listing data + product type schema from DB)
   const extracted = await extractItems(listing, llm, db);
-  if (!extracted.length) return [];
+  if (!extracted.length) {
+    log("identifier", `stage 1 extracted 0 items — skipping stages 2 & 3`);
+    return [];
+  }
+  log("identifier", `stage 1 complete: ${extracted.length} item(s) extracted`);
 
   // Stage 2: Match candidates from catalog (FTS5 if available)
   const candidateMap = matchCandidates(extracted, db);
-  if (![...candidateMap.values()].some((v) => v.length)) return [];
+  const totalCandidates = [...candidateMap.values()].reduce((s, v) => s + v.length, 0);
+  if (!totalCandidates) {
+    log("identifier", `stage 2 found no candidates for any item — skipping stage 3`);
+    return [];
+  }
+  log("identifier", `stage 2 complete: ${totalCandidates} total candidate(s) across ${extracted.length} item(s)`);
 
   // Stage 3: LLM confirms (uses product type schema from DB + listing price)
   const price =
@@ -691,5 +757,7 @@ export async function identifyAndMatch(
     price,
     marketplace,
   );
-  return confirmed.filter((m): m is ConfirmedMatch => m !== null);
+  const finalMatches = confirmed.filter((m): m is ConfirmedMatch => m !== null);
+  log("identifier", `stage 3 complete: ${finalMatches.length} confirmed match(es)`);
+  return finalMatches;
 }

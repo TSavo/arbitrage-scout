@@ -21,6 +21,7 @@ import {
   marketplaces,
 } from "../db/schema";
 import { cfg } from "./helpers";
+import { log, section, progress } from "@/lib/logger";
 
 type Config = Record<string, unknown>;
 
@@ -165,6 +166,8 @@ function seedMarketplaces(db: Db): void {
 // ── FTS5 index ────────────────────────────────────────────────────────
 
 function rebuildFtsIndex(sqlite: Database.Database): void {
+  log("stock", "rebuilding FTS5 search index...");
+  const start = Date.now();
   sqlite.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
       product_id,
@@ -180,6 +183,8 @@ function rebuildFtsIndex(sqlite: Database.Database): void {
     INSERT INTO products_fts(product_id, title, platform, product_type_id)
     SELECT id, title, platform, product_type_id FROM products
   `);
+  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  log("stock", `FTS5 index rebuilt in ${elapsed}s`);
 }
 
 // ── CSV loader ────────────────────────────────────────────────────────
@@ -190,6 +195,7 @@ async function loadCsv(
   sqlite: Database.Database,
   db: Db,
 ): Promise<number> {
+  log("stock", `loading CSV: ${csvPath} (category: ${category})`);
   const productTypeId = CSV_CATEGORY_MAP[category] ?? category;
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const now = new Date().toISOString();
@@ -200,6 +206,7 @@ async function loadCsv(
       (r) => r.id,
     ),
   );
+  log("stock", `dedup set: ${existingIds.size} existing products in DB`);
 
   // Prepare batch insert statements
   const insertProduct = sqlite.prepare(`
@@ -235,10 +242,20 @@ async function loadCsv(
     let headers: string[] = [];
     let stocked = 0;
     let lineNo = 0;
+    let totalLines = 0;
 
     const productsBatch: Record<string, unknown>[] = [];
     const identifiersBatch: Record<string, unknown>[] = [];
     const pricesBatch: Record<string, unknown>[] = [];
+
+    // Count total lines for progress reporting (non-blocking, best-effort)
+    try {
+      const content = fs.readFileSync(csvPath, "utf8");
+      totalLines = content.split("\n").filter((l) => l.trim()).length - 1; // subtract header
+      log("stock", `CSV row count: ${totalLines} data rows`);
+    } catch {
+      // If we can't pre-count, progress will show 0/0
+    }
 
     rl.on("line", (line) => {
       if (!line.trim()) return;
@@ -333,7 +350,7 @@ async function loadCsv(
           pricesBatch.splice(0),
         );
         stocked += 5000;
-        process.stdout.write(`\r  ${stocked} rows loaded...`);
+        progress(stocked, totalLines, `${category} rows loaded`);
       }
     });
 
@@ -346,7 +363,8 @@ async function loadCsv(
           pricesBatch.splice(0),
         );
       }
-      process.stdout.write("\n");
+      progress(totalLines || stocked, totalLines || stocked, `${category} rows loaded`);
+      log("stock", `CSV load complete: ${stocked} products loaded from ${csvPath}`);
       resolve(stocked);
     });
 
@@ -372,23 +390,26 @@ export async function runStock(config: Config): Promise<number> {
 
   let total = 0;
 
-  for (const [csvPath, category] of Object.entries(CSV_FILES)) {
-    if (!fs.existsSync(csvPath)) continue;
+  const availableCsvs = Object.entries(CSV_FILES).filter(([csvPath]) => fs.existsSync(csvPath));
+  const missingCsvs = Object.entries(CSV_FILES).filter(([csvPath]) => !fs.existsSync(csvPath));
+  for (const [csvPath] of missingCsvs) {
+    log("stock", `CSV not found, skipping: ${csvPath}`);
+  }
+  log("stock", `${availableCsvs.length} CSV file(s) to load`);
 
-    console.log(`Loading ${csvPath} (${category})...`);
+  for (const [csvPath, category] of availableCsvs) {
+    section(`STOCK: ${category.toUpperCase()}`);
     const n = await loadCsv(csvPath, category, sqlite, db);
     total += n;
-    if (n > 0) {
-      console.log(`  loaded ${n} products from ${csvPath.split("/").pop()}`);
-    }
+    log("stock", `${category}: ${n} products loaded from ${csvPath.split("/").pop()}`);
   }
 
   if (total > 0) {
-    console.log("rebuilding search index...");
+    section("FTS5 INDEX REBUILD");
     rebuildFtsIndex(sqlite);
-    console.log("search index ready");
   }
 
-  console.log(`\n${total} products stocked from CSV`);
+  section("STOCK COMPLETE");
+  log("stock", `total: ${total} products stocked from CSV`);
   return total;
 }
