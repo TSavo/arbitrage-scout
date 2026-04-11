@@ -12,39 +12,59 @@ import { makeRawListing } from "./IMarketplaceAdapter";
 
 const GRAPHQL_URL = "https://hibid.com/graphql";
 const RATE_LIMIT_MS = 5000; // 1 req per 5 seconds
-const LOT_SEARCH_QUERY = `
-  query LotSearch(
-    $pageNumber: Int!, $pageLength: Int!,
-    $searchText: String, $status: AuctionLotStatus,
-    $sortOrder: AuctionSort, $filter: LotFilter,
-    $isArchive: Boolean, $miles: Int,
-    $category: CategoryId
+// Exact query captured from HiBid's frontend via Playwright interception
+const LOT_SEARCH_QUERY = `query LotSearch($auctionId: Int = null, $pageNumber: Int!, $pageLength: Int!, $category: CategoryId = null, $searchText: String = null, $zip: String = null, $miles: Int = null, $shippingOffered: Boolean = false, $countryName: String = null, $state: String = null, $status: AuctionLotStatus = null, $sortOrder: EventItemSortOrder = null, $filter: AuctionLotFilter = null, $isArchive: Boolean = false, $dateStart: DateTime, $dateEnd: DateTime, $countAsView: Boolean = true, $hideGoogle: Boolean = false) {
+  lotSearch(
+    input: {auctionId: $auctionId, category: $category, searchText: $searchText, zip: $zip, miles: $miles, shippingOffered: $shippingOffered, countryName: $countryName, state: $state, status: $status, sortOrder: $sortOrder, filter: $filter, isArchive: $isArchive, dateStart: $dateStart, dateEnd: $dateEnd, countAsView: $countAsView, hideGoogle: $hideGoogle}
+    pageNumber: $pageNumber
+    pageLength: $pageLength
+    sortDirection: DESC
   ) {
-    lotSearch(input: {
-      searchText: $searchText, status: $status,
-      sortOrder: $sortOrder, filter: $filter,
-      isArchive: $isArchive, miles: $miles,
-      category: $category
-    }, pageNumber: $pageNumber, pageLength: $pageLength) {
-      pagedResults {
-        totalCount
-        results {
-          lotId
-          lotNumber
-          title
-          currentBid
-          startBid
-          bidCount
-          endDate
-          imageUrl
-          auctionTitle
-          auctionId
-          description
+    pagedResults {
+      totalCount
+      results {
+        id
+        itemId
+        lead
+        description
+        lotNumber
+        quantity
+        shippingOffered
+        featuredPicture {
+          thumbnailLocation
+          fullSizeLocation
+          __typename
         }
+        lotState {
+          bidCount
+          highBid
+          buyNow
+          minBid
+          isClosed
+          isLive
+          status
+          timeLeft
+          timeLeftSeconds
+          __typename
+        }
+        auction {
+          id
+          eventName
+          eventCity
+          eventState
+          __typename
+        }
+        site {
+          domain
+          __typename
+        }
+        __typename
       }
+      __typename
     }
+    __typename
   }
-`;
+}`;
 
 interface HiBidLot {
   lotId: number;
@@ -172,17 +192,25 @@ export class HiBidAdapter implements IMarketplaceAdapter {
     log("hibid", `searching: "${query}" limit=${limit}`);
 
     const data = await this.graphql("LotSearch", {
+      auctionId: null,
+      category: null,
       searchText: query,
+      zip: "",
+      miles: 50,
+      shippingOffered: false,
+      countryName: null,
+      state: "",
       status: "OPEN",
-      pageNumber: 1,
-      pageLength: limit,
       sortOrder: "NO_ORDER",
       filter: "ALL",
       isArchive: false,
-      miles: 50,
+      countAsView: false,
+      hideGoogle: false,
+      pageNumber: 1,
+      pageLength: limit,
     }, LOT_SEARCH_QUERY) as {
       lotSearch?: {
-        pagedResults?: { totalCount: number; results: HiBidLot[] };
+        pagedResults?: { totalCount: number; results: any[] };
       };
     } | null;
 
@@ -194,24 +222,30 @@ export class HiBidAdapter implements IMarketplaceAdapter {
     const { totalCount, results } = data.lotSearch.pagedResults;
     log("hibid", `search "${query}": ${results.length} lots (${totalCount} total)`);
 
-    let listings = results.map((lot): RawListing =>
-      makeRawListing({
+    let listings = results.map((lot): RawListing => {
+      const lotState = lot.lotState || {};
+      const auction = lot.auction || {};
+      const pic = lot.featuredPicture || {};
+      return makeRawListing({
         marketplace_id: "hibid",
-        listing_id: String(lot.lotId),
-        title: lot.title,
-        price_usd: lot.currentBid || lot.startBid || 0,
-        url: `https://hibid.com/lot/${lot.lotId}`,
+        listing_id: String(lot.itemId || lot.id),
+        title: lot.lead || "",
+        price_usd: lotState.highBid || lotState.minBid || 0,
+        url: `https://hibid.com/lot/${lot.itemId || lot.id}`,
         description: lot.description ?? undefined,
-        image_url: lot.imageUrl ?? undefined,
-        num_bids: lot.bidCount,
-        end_time: lot.endDate,
+        image_url: pic.thumbnailLocation ?? undefined,
+        num_bids: lotState.bidCount || 0,
+        end_time: lotState.timeLeft ?? undefined,
         extra: {
-          auction_title: lot.auctionTitle,
-          auction_id: lot.auctionId,
-          start_bid: lot.startBid,
+          auction_name: auction.eventName,
+          auction_city: auction.eventCity,
+          auction_state: auction.eventState,
+          buy_now: lotState.buyNow,
+          quantity: lot.quantity,
+          shipping_offered: lot.shippingOffered,
         },
-      }),
-    );
+      });
+    });
 
     // Filter by max price if set
     if (options.max_price) {
