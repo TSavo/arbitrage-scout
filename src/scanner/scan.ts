@@ -50,6 +50,7 @@ function seedMarketplaces(
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
     { id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true },
     { id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true },
+    { id: "discogs", name: "Discogs", baseUrl: "https://www.discogs.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
   ];
   for (const mp of defaults) {
