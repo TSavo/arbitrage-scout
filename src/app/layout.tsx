@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Sora, Instrument_Sans, JetBrains_Mono } from "next/font/google";
 import { SidebarNav } from "@/components/SidebarNav";
+import { SidebarStatus } from "@/components/SidebarStatus";
 import "./globals.css";
 
 const sora = Sora({
@@ -76,26 +77,9 @@ export default function RootLayout({
           {/* Nav (client component for active state) */}
           <SidebarNav />
 
-          {/* Status */}
+          {/* Status — reflects real system state */}
           <div className="px-4 py-3 border-t" style={{ borderColor: "#262a36" }}>
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <div
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: "#34d399" }}
-                />
-                <div
-                  className="absolute inset-0 w-1.5 h-1.5 rounded-full animate-ping"
-                  style={{ background: "#34d399", opacity: 0.4 }}
-                />
-              </div>
-              <span
-                className="text-[10px]"
-                style={{ color: "#52525e", fontFamily: "var(--font-mono)" }}
-              >
-                live
-              </span>
-            </div>
+            <SidebarStatus />
           </div>
         </aside>
 

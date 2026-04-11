@@ -8,6 +8,7 @@ import { findCrossMarketplaceDeals } from "@/scanner/arbitrage";
 import { buildAdapters } from "@/sources/registry";
 import { runEmbed } from "@/scanner/embed";
 import { verifyOpportunityUrls } from "@/scanner/verify";
+import { eventBus } from "@/lib/events";
 
 // ── Module-level state (survives across requests in the same process) ──
 // NOTE: Next.js may spawn multiple workers in production. These variables are
@@ -65,12 +66,14 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "scan already running" }, { status: 409 });
     }
     running.scan = true;
+    eventBus.push("scan_start", "scanner", "Scan started");
     const config = buildConfig();
     const adapters = buildAdapters(config);
     Promise.resolve()
       .then(() => runScan(config, adapters))
       .then((n) => {
         lastRun.scan = { at: new Date().toISOString(), result: { count: n } };
+        eventBus.push("scan_end", "scanner", `Scan complete: ${n} results`, { count: n });
       })
       .catch((err) => {
         lastRun.scan = {
@@ -78,6 +81,7 @@ export async function POST(request: NextRequest) {
           result: null,
           error: String(err),
         };
+        eventBus.push("error", "scanner", `Scan failed: ${String(err)}`);
       })
       .finally(() => {
         running.scan = false;
@@ -90,11 +94,13 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "stock already running" }, { status: 409 });
     }
     running.stock = true;
+    eventBus.push("scan_start", "stock", "Stock import started");
     const config = buildConfig();
     Promise.resolve()
       .then(() => runStock(config))
       .then((n) => {
         lastRun.stock = { at: new Date().toISOString(), result: { count: n } };
+        eventBus.push("scan_end", "stock", `Stock import complete: ${n} items`, { count: n });
       })
       .catch((err) => {
         lastRun.stock = {
@@ -102,6 +108,7 @@ export async function POST(request: NextRequest) {
           result: null,
           error: String(err),
         };
+        eventBus.push("error", "stock", `Stock import failed: ${String(err)}`);
       })
       .finally(() => {
         running.stock = false;
@@ -169,13 +176,16 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "embed already running" }, { status: 409 });
     }
     running.embed = true;
+    eventBus.push("scan_start", "embed", "Embedding started");
     Promise.resolve()
       .then(() => runEmbed())
       .then((result) => {
         lastRun.embed = { at: new Date().toISOString(), result };
+        eventBus.push("scan_end", "embed", "Embedding complete", result as unknown as Record<string, unknown> | undefined);
       })
       .catch((err) => {
         lastRun.embed = { at: new Date().toISOString(), result: null, error: String(err) };
+        eventBus.push("error", "embed", `Embedding failed: ${String(err)}`);
       })
       .finally(() => {
         running.embed = false;

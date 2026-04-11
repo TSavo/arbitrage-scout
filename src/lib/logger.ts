@@ -1,7 +1,10 @@
 /**
  * Simple structured logger. Prefixes every line with timestamp + source.
  * Color-coded for terminal readability.
+ * Also emits to the event bus for real-time SSE streaming.
  */
+
+import { eventBus } from "./events";
 
 const COLORS = {
   dim: "\x1b[2m",
@@ -23,24 +26,28 @@ export function log(source: string, message: string, ...args: unknown[]) {
     `${COLORS.dim}${timestamp()}${COLORS.reset} ${COLORS.cyan}${source}${COLORS.reset} ${message}`,
     ...args,
   );
+  eventBus.push("log", source, message);
 }
 
 export function hit(source: string, message: string) {
   console.log(
     `${COLORS.dim}${timestamp()}${COLORS.reset} ${COLORS.green}${COLORS.bold}>>> HIT${COLORS.reset} ${COLORS.green}${message}${COLORS.reset}`,
   );
+  eventBus.push("opportunity", source, message);
 }
 
 export function verify(source: string, message: string) {
   console.log(
     `${COLORS.dim}${timestamp()}${COLORS.reset} ${COLORS.yellow}${COLORS.bold}!! VERIFY${COLORS.reset} ${COLORS.yellow}${message}${COLORS.reset}`,
   );
+  eventBus.push("log", source, `VERIFY: ${message}`);
 }
 
 export function skip(source: string, message: string) {
   console.log(
     `${COLORS.dim}${timestamp()}${COLORS.reset} ${COLORS.dim}SKIP ${message}${COLORS.reset}`,
   );
+  eventBus.push("log", source, `SKIP: ${message}`);
 }
 
 export function error(source: string, message: string, err?: unknown) {
@@ -48,10 +55,13 @@ export function error(source: string, message: string, err?: unknown) {
     `${COLORS.dim}${timestamp()}${COLORS.reset} ${COLORS.red}ERROR ${source}${COLORS.reset} ${message}`,
     err instanceof Error ? err.message : err ?? "",
   );
+  const errDetail = err instanceof Error ? err.message : err ? String(err) : undefined;
+  eventBus.push("error", source, message, errDetail ? { error: errDetail } : undefined);
 }
 
 export function section(title: string) {
   console.log(`\n${COLORS.bold}${COLORS.magenta}═══ ${title} ═══${COLORS.reset}`);
+  eventBus.push("scan_start", "system", title);
 }
 
 export function progress(current: number, total: number, label: string) {
@@ -61,4 +71,10 @@ export function progress(current: number, total: number, label: string) {
     `\r${COLORS.dim}${bar} ${pct}% ${current}/${total} ${label}${COLORS.reset}`,
   );
   if (current >= total) process.stdout.write("\n");
+  eventBus.push("progress", "system", `${pct}% ${current}/${total} ${label}`, {
+    current,
+    total,
+    pct,
+    label,
+  });
 }

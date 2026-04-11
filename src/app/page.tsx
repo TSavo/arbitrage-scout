@@ -11,6 +11,7 @@ import {
 import { desc, eq, count, sql } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
+import { LiveStats } from "@/components/LiveStats";
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", {
@@ -81,6 +82,8 @@ export default async function DashboardPage() {
 
   return (
     <div className="p-6 space-y-6">
+      <LiveStats />
+
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
         <p className="text-sm mt-0.5" style={{ color: "#9295a0" }}>

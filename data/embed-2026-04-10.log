@@ -1,0 +1,31 @@
+
+[1m[35m═══ EMBED — Computing product embeddings (batch 50) ═══[0m
+[2m2026-04-11 04:33:01[0m [36mdb/client[0m opening DB at data/scout-v2.db
+[2m2026-04-11 04:33:01[0m [36mdb/client[0m pragmas set: journal_mode=WAL foreign_keys=ON
+[2m2026-04-11 04:33:02[0m [36membed[0m 417316 products | 3016 already cached (47.1 MB)
+[2m2026-04-11 04:33:02[0m [36membed[0m ollama: http://battleaxe:11434 | model: qwen3-embedding:8b | batch: 50
+[2m2026-04-11 04:33:02[0m [36membed[0m batches to process: 8347
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 50/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 100/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 150/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 200/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 250/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 300/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 350/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 400/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 450/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 500/417316 products[0m[2m2026-04-11 04:33:02[0m [36membed[0m 500/417316 (0%) | +0 new | 500 cached | 0 err | 0/s | ETA ?m
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 550/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 600/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 650/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 700/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 750/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 800/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 850/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 900/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 950/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1000/417316 products[0m[2m2026-04-11 04:33:02[0m [36membed[0m 1000/417316 (0%) | +0 new | 1000 cached | 0 err | 0/s | ETA ?m
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1050/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1100/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1150/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1200/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1250/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1300/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1350/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1400/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1450/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1500/417316 products[0m[2m2026-04-11 04:33:02[0m [36membed[0m 1500/417316 (0%) | +0 new | 1500 cached | 0 err | 0/s | ETA ?m
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1550/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1600/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1650/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1700/417316 products[0m[2m░░░░░░░░░░░░░░░░░░░░ 0% 1750/417316 products[0m[2m2026-04-11 04:33:07[0m [36membedding[0m batch embedded 50 texts in 4938ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1800/417316 products[0m[2m2026-04-11 04:33:12[0m [36membedding[0m batch embedded 50 texts in 5435ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1850/417316 products[0m[2m2026-04-11 04:33:19[0m [36membedding[0m batch embedded 50 texts in 6839ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1900/417316 products[0m[2m2026-04-11 04:33:21[0m [36membedding[0m batch embedded 50 texts in 1447ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 1950/417316 products[0m[2m2026-04-11 04:33:26[0m [36membedding[0m batch embedded 50 texts in 5484ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 2000/417316 products[0m[2m2026-04-11 04:33:26[0m [36membed[0m 2000/417316 (0%) | +250 new | 1750 cached | 0 err | 10.3/s | ETA 675m
+[2m2026-04-11 04:33:32[0m [36membedding[0m batch embedded 50 texts in 5511ms
+[2m░░░░░░░░░░░░░░░░░░░░ 0% 2050/417316 products[0m[2m2026-04-11 04:33:38[0m [36membedding[0m batch embedded 50 texts in 6863ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2100/417316 products[0m[2m2026-04-11 04:33:40[0m [36membedding[0m batch embedded 50 texts in 1438ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2150/417316 products[0m[2m2026-04-11 04:33:45[0m [36membedding[0m batch embedded 50 texts in 5533ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2200/417316 products[0m[2m2026-04-11 04:33:51[0m [36membedding[0m batch embedded 50 texts in 5292ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2250/417316 products[0m[2m2026-04-11 04:33:56[0m [36membedding[0m batch embedded 50 texts in 5325ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2300/417316 products[0m[2m2026-04-11 04:34:03[0m [36membedding[0m batch embedded 50 texts in 6670ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2350/417316 products[0m[2m2026-04-11 04:34:04[0m [36membedding[0m batch embedded 50 texts in 1320ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2400/417316 products[0m[2m2026-04-11 04:34:05[0m [36membedding[0m batch embedded 50 texts in 1307ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2450/417316 products[0m[2m2026-04-11 04:34:11[0m [36membedding[0m batch embedded 50 texts in 5527ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2500/417316 products[0m[2m2026-04-11 04:34:11[0m [36membed[0m 2500/417316 (1%) | +750 new | 1750 cached | 0 err | 10.8/s | ETA 638m
+[2m2026-04-11 04:34:17[0m [36membedding[0m batch embedded 50 texts in 6116ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2550/417316 products[0m[2m2026-04-11 04:34:18[0m [36membedding[0m batch embedded 50 texts in 1442ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2600/417316 products[0m[2m2026-04-11 04:34:24[0m [36membedding[0m batch embedded 50 texts in 5617ms
+[2m░░░░░░░░░░░░░░░░░░░░ 1% 2650/417316 products[0m
