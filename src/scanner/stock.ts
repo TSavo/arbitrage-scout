@@ -32,6 +32,12 @@ const CSV_FILES: Record<string, string> = {
   "/tmp/pc-videogames.csv": "videogames",
   "/tmp/pc-pokemon.csv": "pokemon",
   "/tmp/pc-magic.csv": "magic",
+  "/tmp/pc-yugioh.csv": "yugioh",
+  "/tmp/pc-onepiece.csv": "onepiece",
+  "/tmp/pc-funko.csv": "funko",
+  "/tmp/pc-lego.csv": "lego",
+  "/tmp/pc-comics.csv": "comics",
+  "/tmp/pc-coins.csv": "coins",
 };
 
 /** Map PriceCharting CSV category → product_type_id */
@@ -39,6 +45,12 @@ const CSV_CATEGORY_MAP: Record<string, string> = {
   videogames: "retro_game",
   pokemon: "pokemon_card",
   magic: "mtg_card",
+  yugioh: "yugioh_card",
+  onepiece: "onepiece_card",
+  funko: "funko_pop",
+  lego: "lego_set",
+  comics: "comic",
+  coins: "coin",
 };
 
 /** PriceCharting condition field → our condition name */
@@ -128,6 +140,36 @@ function seedProductTypes(db: Db): void {
       name: "Comic Book",
       conditionSchema: ["loose", "graded"],
       metadataSchema: ["publisher", "issue", "year", "grade", "grading_company"],
+    },
+    {
+      id: "yugioh_card",
+      name: "Yu-Gi-Oh Card",
+      conditionSchema: ["loose", "graded"],
+      metadataSchema: ["set_name", "rarity", "edition", "language", "grade", "grading_company"],
+    },
+    {
+      id: "onepiece_card",
+      name: "One Piece Card",
+      conditionSchema: ["loose", "graded"],
+      metadataSchema: ["set_name", "rarity", "language", "grade", "grading_company"],
+    },
+    {
+      id: "funko_pop",
+      name: "Funko Pop",
+      conditionSchema: ["loose", "in_box", "graded"],
+      metadataSchema: ["series", "number", "exclusive", "chase", "variant"],
+    },
+    {
+      id: "lego_set",
+      name: "LEGO Set",
+      conditionSchema: ["loose", "cib", "new_sealed"],
+      metadataSchema: ["theme", "set_number", "piece_count", "year"],
+    },
+    {
+      id: "coin",
+      name: "Coin",
+      conditionSchema: ["loose", "graded"],
+      metadataSchema: ["year", "mint", "denomination", "grade", "grading_company"],
     },
   ];
 

@@ -7,7 +7,7 @@ set -euo pipefail
 cd ~/Projects/arbitrage-scout-ts
 
 LOG="data/daily-$(date +%Y-%m-%d).log"
-exec &>> "$LOG"
+exec >> "$LOG" 2>&1
 echo "=== $(date) ==="
 
 # Load env
@@ -21,6 +21,12 @@ echo "[1/6] Downloading CSVs..."
 curl -so /tmp/pc-videogames.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}"
 curl -so /tmp/pc-pokemon.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=pokemon-cards"
 curl -so /tmp/pc-magic.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=magic-cards"
+curl -so /tmp/pc-yugioh.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=yugioh-cards"
+curl -so /tmp/pc-onepiece.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=one-piece-cards"
+curl -so /tmp/pc-funko.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=funko-pops"
+curl -so /tmp/pc-lego.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=lego-sets"
+curl -so /tmp/pc-comics.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=comics"
+curl -so /tmp/pc-coins.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=coins"
 echo "CSVs downloaded"
 
 # 2. Stock catalog with fresh prices (new price_points for today)

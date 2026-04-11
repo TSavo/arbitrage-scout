@@ -207,6 +207,17 @@ export class ShopGoodwillAdapter implements IMarketplaceAdapter {
       "game boy",
       "retro games",
       "vintage games",
+      "funko pop",
+      "lego set",
+      "lego sealed",
+      "comic books",
+      "comic book lot",
+      "yugioh cards",
+      "yu-gi-oh cards",
+      "one piece cards",
+      "coins collection",
+      "silver coins",
+      "gold coins",
     ];
   }
 
