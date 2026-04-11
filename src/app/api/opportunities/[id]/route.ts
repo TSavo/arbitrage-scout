@@ -19,7 +19,7 @@ export async function PATCH(
   }
 
   const body = await request.json().catch(() => ({}));
-  const { status, notes } = body;
+  const { status, notes, buyPriceUsd, salePriceUsd, saleDate, actualFeesUsd } = body;
 
   if (status !== undefined && !VALID_STATUSES.includes(status)) {
     return Response.json(
@@ -28,10 +28,24 @@ export async function PATCH(
     );
   }
 
+  // Validate prices are positive numbers if provided
+  for (const [field, value] of Object.entries({ buyPriceUsd, salePriceUsd, actualFeesUsd })) {
+    if (value !== undefined && (typeof value !== "number" || value < 0)) {
+      return Response.json(
+        { error: `${field} must be a non-negative number` },
+        { status: 400 }
+      );
+    }
+  }
+
   const updates: Partial<{
     status: string;
     notes: string;
     reviewedAt: string;
+    buyPriceUsd: number;
+    salePriceUsd: number;
+    saleDate: string;
+    actualFeesUsd: number;
   }> = {};
 
   if (status !== undefined) {
@@ -43,6 +57,22 @@ export async function PATCH(
 
   if (notes !== undefined) {
     updates.notes = notes;
+  }
+
+  if (buyPriceUsd !== undefined) {
+    updates.buyPriceUsd = buyPriceUsd;
+  }
+
+  if (salePriceUsd !== undefined) {
+    updates.salePriceUsd = salePriceUsd;
+  }
+
+  if (saleDate !== undefined) {
+    updates.saleDate = saleDate;
+  }
+
+  if (actualFeesUsd !== undefined) {
+    updates.actualFeesUsd = actualFeesUsd;
   }
 
   if (Object.keys(updates).length === 0) {

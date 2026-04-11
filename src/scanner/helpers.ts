@@ -56,6 +56,11 @@ export function upsertListing(
     log("helpers", `listing upsert: UPDATE id=${existing.id} [${listing.marketplace_id}/${listing.listing_id}] price=$${listing.price_usd.toFixed(2)}`);
     db.update(listings)
       .set({
+        title: listing.title,
+        url: listing.url ?? existing.url,
+        description: listing.description ?? existing.description,
+        seller: listing.seller ?? existing.seller,
+        isLot: isLot || existing.isLot,
         priceUsd: listing.price_usd,
         shippingUsd: listing.shipping_usd ?? 0,
         lastSeenAt: now,
@@ -65,6 +70,11 @@ export function upsertListing(
       .run();
     return {
       ...existing,
+      title: listing.title,
+      url: listing.url ?? existing.url,
+      description: listing.description ?? existing.description,
+      seller: listing.seller ?? existing.seller,
+      isLot: isLot || existing.isLot,
       priceUsd: listing.price_usd,
       shippingUsd: listing.shipping_usd ?? 0,
       lastSeenAt: now,

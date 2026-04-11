@@ -8,22 +8,25 @@
 
 import * as fs from "fs";
 import * as readline from "readline";
-import { resolve } from "path";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq } from "drizzle-orm";
-import * as schema from "../db/schema";
+import { eq, sql } from "drizzle-orm";
+import { db } from "@/db/client";
 import {
   products,
   productTypes,
   productIdentifiers,
   pricePoints,
   marketplaces,
-} from "../db/schema";
+} from "@/db/schema";
 import { cfg } from "./helpers";
 import { log, section, progress } from "@/lib/logger";
 import { loadTcgPlayerPrices } from "../sources/tcgplayer";
 import { CATEGORIES } from "../sources/tcgcsv";
+import { embeddingRepo } from "@/db/repos/EmbeddingRepo";
+
+interface CsvResult {
+  count: number;
+  newProducts: { id: string; text: string }[];
+}
 
 type Config = Record<string, unknown>;
 
@@ -67,13 +70,6 @@ const CONDITION_MAP: Record<string, string> = {
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function openDb(dbPath: string) {
-  const sqlite = new Database(resolve(dbPath));
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  return { sqlite, db: drizzle(sqlite, { schema }) };
-}
-
 function parseDollar(raw: string): number | null {
   const cleaned = raw.replace("$", "").replace(",", "").trim();
   if (!cleaned) return null;
@@ -107,11 +103,9 @@ function parseCsvLine(line: string): string[] {
   return fields;
 }
 
-type Db = ReturnType<typeof drizzle<typeof schema>>;
-
 // ── Seeding ───────────────────────────────────────────────────────────
 
-function seedProductTypes(db: Db): void {
+function seedProductTypes(): void {
   const defaults: (typeof productTypes.$inferInsert)[] = [
     {
       id: "retro_game",
@@ -123,7 +117,7 @@ function seedProductTypes(db: Db): void {
       id: "pokemon_card",
       name: "Pokemon Card",
       conditionSchema: ["loose", "graded"],
-      metadataSchema: ["edition", "holo_type", "language", "grade", "grading_company"],
+      metadataSchema: ["set_name", "card_number", "rarity", "edition", "holo_type", "language", "grade", "grading_company"],
     },
     {
       id: "mtg_card",
@@ -188,7 +182,7 @@ function seedProductTypes(db: Db): void {
   }
 }
 
-function seedMarketplaces(db: Db): void {
+function seedMarketplaces(): void {
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
@@ -209,10 +203,10 @@ function seedMarketplaces(db: Db): void {
 
 // ── FTS5 index ────────────────────────────────────────────────────────
 
-function rebuildFtsIndex(sqlite: Database.Database): void {
+function rebuildFtsIndex(): void {
   log("stock", "rebuilding FTS5 search index...");
   const start = Date.now();
-  sqlite.exec(`
+  db.run(sql`
     CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
       product_id,
       title,
@@ -222,8 +216,8 @@ function rebuildFtsIndex(sqlite: Database.Database): void {
       content_rowid='rowid'
     )
   `);
-  sqlite.exec("DELETE FROM products_fts");
-  sqlite.exec(`
+  db.run(sql`DELETE FROM products_fts`);
+  db.run(sql`
     INSERT INTO products_fts(product_id, title, platform, product_type_id)
     SELECT id, title, platform, product_type_id FROM products
   `);
@@ -236,48 +230,19 @@ function rebuildFtsIndex(sqlite: Database.Database): void {
 async function loadCsv(
   csvPath: string,
   category: string,
-  sqlite: Database.Database,
-  db: Db,
-): Promise<number> {
+): Promise<CsvResult> {
   log("stock", `loading CSV: ${csvPath} (category: ${category})`);
   const productTypeId = CSV_CATEGORY_MAP[category] ?? category;
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const now = new Date().toISOString();
 
   // Load existing IDs for fast dedup
-  const existingIds = new Set<string>(
-    (sqlite.prepare("SELECT id FROM products").all() as { id: string }[]).map(
-      (r) => r.id,
-    ),
-  );
+  const existingRows = db
+    .select({ id: products.id })
+    .from(products)
+    .all();
+  const existingIds = new Set<string>(existingRows.map((r) => r.id));
   log("stock", `dedup set: ${existingIds.size} existing products in DB`);
-
-  // Prepare batch insert statements
-  const insertProduct = sqlite.prepare(`
-    INSERT OR IGNORE INTO products
-      (id, product_type_id, title, platform, release_date, genre, sales_volume, created_at, updated_at)
-    VALUES (@id, @product_type_id, @title, @platform, @release_date, @genre, @sales_volume, @created_at, @updated_at)
-  `);
-  const insertIdentifier = sqlite.prepare(`
-    INSERT OR IGNORE INTO product_identifiers (product_id, identifier_type, identifier_value)
-    VALUES (@product_id, @identifier_type, @identifier_value)
-  `);
-  const insertPrice = sqlite.prepare(`
-    INSERT OR IGNORE INTO price_points (product_id, source, condition, price_usd, recorded_at)
-    VALUES (@product_id, @source, @condition, @price_usd, @recorded_at)
-  `);
-
-  const flushProducts = sqlite.transaction(
-    (
-      productsBatch: Record<string, unknown>[],
-      identifiersBatch: Record<string, unknown>[],
-      pricesBatch: Record<string, unknown>[],
-    ) => {
-      for (const p of productsBatch) insertProduct.run(p);
-      for (const i of identifiersBatch) insertIdentifier.run(i);
-      for (const p of pricesBatch) insertPrice.run(p);
-    },
-  );
 
   return new Promise((resolve, reject) => {
     const stream = fs.createReadStream(csvPath, { encoding: "utf8" });
@@ -288,17 +253,32 @@ async function loadCsv(
     let lineNo = 0;
     let totalLines = 0;
 
-    const productsBatch: Record<string, unknown>[] = [];
-    const identifiersBatch: Record<string, unknown>[] = [];
-    const pricesBatch: Record<string, unknown>[] = [];
+    const productsBatch: (typeof products.$inferInsert)[] = [];
+    const identifiersBatch: (typeof productIdentifiers.$inferInsert)[] = [];
+    const pricesBatch: (typeof pricePoints.$inferInsert)[] = [];
+    const newProducts: { id: string; text: string }[] = [];
 
-    // Count total lines for progress reporting (non-blocking, best-effort)
-    try {
-      const content = fs.readFileSync(csvPath, "utf8");
-      totalLines = content.split("\n").filter((l) => l.trim()).length - 1; // subtract header
-      log("stock", `CSV row count: ${totalLines} data rows`);
-    } catch {
-      // If we can't pre-count, progress will show 0/0
+    // totalLines stays 0 — progress function handles unknown total gracefully.
+    // Previously used readFileSync to count lines, but that doubled memory usage.
+
+    function flushBatch() {
+      if (!productsBatch.length) return;
+
+      db.transaction((tx) => {
+        for (const p of productsBatch) {
+          tx.insert(products).values(p).onConflictDoNothing().run();
+        }
+        for (const i of identifiersBatch) {
+          tx.insert(productIdentifiers).values(i).onConflictDoNothing().run();
+        }
+        for (const p of pricesBatch) {
+          tx.insert(pricePoints).values(p).onConflictDoNothing().run();
+        }
+      });
+
+      productsBatch.length = 0;
+      identifiersBatch.length = 0;
+      pricesBatch.length = 0;
     }
 
     rl.on("line", (line) => {
@@ -340,60 +320,59 @@ async function loadCsv(
 
       productsBatch.push({
         id: productId,
-        product_type_id: productTypeId,
+        productTypeId,
         title: name,
         platform: consoleName || null,
-        release_date: row["release-date"] || null,
+        releaseDate: row["release-date"] || null,
         genre: row["genre"] || null,
-        sales_volume: volume,
-        created_at: now,
-        updated_at: now,
+        salesVolume: volume,
+        createdAt: now,
+        updatedAt: now,
       });
 
+      newProducts.push({ id: productId, text: `${name} ${consoleName || ""}`.trim() });
+
       identifiersBatch.push({
-        product_id: productId,
-        identifier_type: "pricecharting",
-        identifier_value: pcId,
+        productId,
+        identifierType: "pricecharting",
+        identifierValue: pcId,
       });
       if (row["upc"]) {
         identifiersBatch.push({
-          product_id: productId,
-          identifier_type: "upc",
-          identifier_value: row["upc"],
+          productId,
+          identifierType: "upc",
+          identifierValue: row["upc"],
         });
       }
       if (row["asin"]) {
         identifiersBatch.push({
-          product_id: productId,
-          identifier_type: "asin",
-          identifier_value: row["asin"],
+          productId,
+          identifierType: "asin",
+          identifierValue: row["asin"],
         });
       }
       if (row["epid"]) {
         identifiersBatch.push({
-          product_id: productId,
-          identifier_type: "epid",
-          identifier_value: row["epid"],
+          productId,
+          identifierType: "epid",
+          identifierValue: row["epid"],
         });
       }
 
       for (const [condition, price] of Object.entries(prices)) {
         pricesBatch.push({
-          product_id: productId,
+          productId,
           source: "pricecharting",
           condition,
-          price_usd: price,
-          recorded_at: today,
+          priceUsd: price,
+          recordedAt: today,
         });
       }
 
       if (productsBatch.length >= 5000) {
-        flushProducts(
-          productsBatch.splice(0),
-          identifiersBatch.splice(0),
-          pricesBatch.splice(0),
-        );
-        stocked += 5000;
+        const batchCount = productsBatch.length;
+        flushBatch();
+        stocked += batchCount;
         progress(stocked, totalLines, `${category} rows loaded`);
       }
     });
@@ -401,15 +380,11 @@ async function loadCsv(
     rl.on("close", () => {
       if (productsBatch.length) {
         stocked += productsBatch.length;
-        flushProducts(
-          productsBatch.splice(0),
-          identifiersBatch.splice(0),
-          pricesBatch.splice(0),
-        );
+        flushBatch();
       }
       progress(totalLines || stocked, totalLines || stocked, `${category} rows loaded`);
       log("stock", `CSV load complete: ${stocked} products loaded from ${csvPath}`);
-      resolve(stocked);
+      resolve({ count: stocked, newProducts });
     });
 
     rl.on("error", reject);
@@ -426,13 +401,11 @@ async function loadCsv(
  * Returns total number of products loaded.
  */
 export async function runStock(config: Config): Promise<number> {
-  const dbPath = cfg(config, "database", "path", "data/scout.db");
-  const { sqlite, db } = openDb(dbPath);
-
-  seedProductTypes(db);
-  seedMarketplaces(db);
+  seedProductTypes();
+  seedMarketplaces();
 
   let total = 0;
+  const allNewProducts: { id: string; text: string }[] = [];
 
   const availableCsvs = Object.entries(CSV_FILES).filter(([csvPath]) => fs.existsSync(csvPath));
   const missingCsvs = Object.entries(CSV_FILES).filter(([csvPath]) => !fs.existsSync(csvPath));
@@ -443,14 +416,15 @@ export async function runStock(config: Config): Promise<number> {
 
   for (const [csvPath, category] of availableCsvs) {
     section(`STOCK: ${category.toUpperCase()}`);
-    const n = await loadCsv(csvPath, category, sqlite, db);
-    total += n;
-    log("stock", `${category}: ${n} products loaded from ${csvPath.split("/").pop()}`);
+    const result = await loadCsv(csvPath, category);
+    total += result.count;
+    allNewProducts.push(...result.newProducts);
+    log("stock", `${category}: ${result.count} products loaded from ${csvPath.split("/").pop()}`);
   }
 
   if (total > 0) {
     section("FTS5 INDEX REBUILD");
-    rebuildFtsIndex(sqlite);
+    rebuildFtsIndex();
   }
 
   // Load TCGplayer prices as a second pricing source alongside PriceCharting.
@@ -466,7 +440,7 @@ export async function runStock(config: Config): Promise<number> {
     ]);
     log("stock", `loading TCGplayer prices for categories=[${tcgCategories.join(",")}]`);
     try {
-      const tcgTotal = await loadTcgPlayerPrices(sqlite, db, tcgCategories);
+      const tcgTotal = await loadTcgPlayerPrices(tcgCategories);
       log("stock", `TCGplayer price load complete: ${tcgTotal} price point(s) inserted`);
     } catch (err) {
       // Non-fatal: CSV data is already loaded; log and continue.
@@ -475,6 +449,29 @@ export async function runStock(config: Config): Promise<number> {
     }
   } else {
     log("stock", "TCGplayer price load skipped (tcgplayer.enabled=false in config)");
+  }
+
+  // Embed just the new products (delta, not full catalog scan)
+  if (allNewProducts.length > 0) {
+    section("EMBED NEW PRODUCTS");
+    const ollamaUrl = process.env.OLLAMA_URL || "http://battleaxe:11434";
+    const BATCH_SIZE = 50;
+    let embedded = 0;
+    log("stock", `embedding ${allNewProducts.length} new products (batch ${BATCH_SIZE})`);
+
+    for (let i = 0; i < allNewProducts.length; i += BATCH_SIZE) {
+      const batch = allNewProducts.slice(i, i + BATCH_SIZE);
+      try {
+        const n = await embeddingRepo.batchEmbed("product", batch, ollamaUrl);
+        embedded += n;
+      } catch {
+        // Non-fatal — bulk embed job will catch stragglers
+      }
+      progress(i + batch.length, allNewProducts.length, "new products embedded");
+    }
+    log("stock", `embedded ${embedded} new products`);
+  } else {
+    log("stock", "no new products to embed");
   }
 
   section("STOCK COMPLETE");

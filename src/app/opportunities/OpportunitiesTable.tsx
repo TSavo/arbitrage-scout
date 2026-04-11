@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
+import Link from "next/link";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -8,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { PriceChart, type PriceDataPoint } from "@/components/PriceChart";
 
 export type LotItem = {
   productTitle: string;
@@ -27,6 +29,7 @@ export type PriceComparison = {
 
 export type OpportunityRow = {
   id: number;
+  productId: string;
   listingTitle: string;
   productTitle: string;
   productPlatform: string;
@@ -37,6 +40,8 @@ export type OpportunityRow = {
   marketPriceUsd: number;
   profitUsd: number;
   marginPct: number;
+  potentialProfitUsd: number | null;
+  potentialMarginPct: number | null;
   status: string;
   flags: string[];
   foundAt: string;
@@ -75,6 +80,17 @@ function timeAgo(ts: string) {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/** Renders relative time only on client to avoid hydration mismatch */
+function TimeAgo({ ts }: { ts: string }) {
+  const [text, setText] = useState(ts.slice(0, 10));
+  useEffect(() => {
+    setText(timeAgo(ts));
+    const interval = setInterval(() => setText(timeAgo(ts)), 60000);
+    return () => clearInterval(interval);
+  }, [ts]);
+  return <>{text}</>;
 }
 
 function conditionBadge(cond: string) {
@@ -156,6 +172,7 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
               <TableHead className="text-xs text-right">Market</TableHead>
               <TableHead className="text-xs text-right cursor-pointer hover:text-foreground"
                 onClick={() => handleSort("profit")}>Profit{sortIcon("profit")}</TableHead>
+              <TableHead className="text-xs text-right">Potential</TableHead>
               <TableHead className="text-xs text-right cursor-pointer hover:text-foreground"
                 onClick={() => handleSort("margin")}>Margin{sortIcon("margin")}</TableHead>
               <TableHead className="text-xs">Status</TableHead>
@@ -170,9 +187,13 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                   onClick={() => setExpanded(expanded === row.id ? null : row.id)}>
                   <TableCell>
                     <div className="space-y-0.5">
-                      <span className="text-sm font-medium block truncate max-w-[250px]">
+                      <Link
+                        href={`/products/${encodeURIComponent(row.productId)}`}
+                        className="text-sm font-medium block truncate max-w-[250px] text-blue-400 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         {row.productTitle}
-                      </span>
+                      </Link>
                       <span className="text-xs text-muted-foreground">
                         {row.productPlatform}
                         {row.isLot && <Badge variant="outline" className="ml-1 text-[10px]">LOT ({row.lotItems.length})</Badge>}
@@ -187,6 +208,13 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                   <TableCell className="text-right font-mono text-sm font-semibold text-green-400">
                     {fmt(row.profitUsd)}
                   </TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    {row.potentialProfitUsd != null && row.potentialProfitUsd !== row.profitUsd ? (
+                      <span style={{ color: "#38bdf8" }}>{fmt(row.potentialProfitUsd)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right font-mono text-sm">{fmtPct(row.marginPct)}</TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(row.status)} className="text-xs">{row.status}</Badge>
@@ -194,12 +222,12 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                       <Badge key={f} variant="secondary" className="text-[10px] ml-1">{f}</Badge>
                     ))}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{timeAgo(row.foundAt)}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground"><TimeAgo ts={row.foundAt} /></TableCell>
                 </TableRow>
 
                 {expanded === row.id && (
                   <TableRow className="bg-muted/5">
-                    <TableCell colSpan={8} className="p-4">
+                    <TableCell colSpan={9} className="p-4">
                       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                         {/* Lot Breakdown */}
                         {row.lotItems.length > 0 && (
@@ -246,13 +274,20 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                           </Card>
                         )}
 
-                        {/* Price Comparisons */}
-                        {row.priceComparisons.length > 0 && (
-                          <Card className="bg-card/50">
-                            <CardHeader className="pb-2">
-                              <CardTitle className="text-sm">Price Comparisons</CardTitle>
-                            </CardHeader>
-                            <CardContent>
+                        {/* Price Chart + Comparisons */}
+                        <Card className="bg-card/50">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm">
+                              <Link href={`/products/${encodeURIComponent(row.productId)}`}
+                                className="text-blue-400 hover:underline"
+                                onClick={(e) => e.stopPropagation()}>
+                                Price History &rarr;
+                              </Link>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <OpportunityPriceChart productId={row.productId} listingPrice={row.listingPriceUsd} />
+                            {row.priceComparisons.length > 0 && (
                               <Table>
                                 <TableHeader>
                                   <TableRow>
@@ -279,9 +314,9 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                                     ))}
                                 </TableBody>
                               </Table>
-                            </CardContent>
-                          </Card>
-                        )}
+                            )}
+                          </CardContent>
+                        </Card>
 
                         {/* Actions + Details */}
                         <Card className="bg-card/50">
@@ -352,3 +387,41 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
 
 // Need Fragment import
 import { Fragment } from "react";
+
+function OpportunityPriceChart({ productId, listingPrice }: { productId: string; listingPrice: number }) {
+  const [chartData, setChartData] = useState<PriceDataPoint[]>([]);
+  const [seriesKeys, setSeriesKeys] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/products/${encodeURIComponent(productId)}/prices`)
+      .then((r) => r.json())
+      .then((rows: { source: string; condition: string; priceUsd: number; recordedAt: string }[]) => {
+        const dateMap = new Map<string, Record<string, number>>();
+        const keys = new Set<string>();
+        for (const p of rows) {
+          const date = p.recordedAt.slice(0, 10);
+          const key = `${p.source} ${p.condition}`;
+          keys.add(key);
+          if (!dateMap.has(date)) dateMap.set(date, {});
+          dateMap.get(date)![key] = p.priceUsd;
+        }
+        const data = Array.from(dateMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([date, vals]) => ({ date, ...vals }));
+        setChartData(data);
+        setSeriesKeys(Array.from(keys));
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [productId]);
+
+  if (loading) return <div className="text-xs text-muted-foreground py-4">Loading chart...</div>;
+  if (!chartData.length) return null;
+
+  return (
+    <div className="mb-3">
+      <PriceChart data={chartData} seriesKeys={seriesKeys} height={180} />
+    </div>
+  );
+}

@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-heading);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -46,77 +46,109 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Custom colors for profit/loss signals */
+  --color-profit: #34d399;
+  --color-loss: #fb7185;
+  --color-caution: #fbbf24;
 }
 
+/* ═══════════════════════════════════════════════════
+   LIGHT THEME (unused but required by shadcn)
+   ═══════════════════════════════════════════════════ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #09090b;
+  --foreground: #e4e4e7;
+  --card: #131318;
+  --card-foreground: #e4e4e7;
+  --popover: #131318;
+  --popover-foreground: #e4e4e7;
+  --primary: #34d399;
+  --primary-foreground: #052e16;
+  --secondary: #1e1e24;
+  --secondary-foreground: #d4d4d8;
+  --muted: #1e1e24;
+  --muted-foreground: #71717a;
+  --accent: #1a2e1e;
+  --accent-foreground: #86efac;
+  --destructive: #fb7185;
+  --border: #27272e;
+  --input: #27272e;
+  --ring: #34d399;
+  --chart-1: #34d399;
+  --chart-2: #38bdf8;
+  --chart-3: #fbbf24;
+  --chart-4: #c084fc;
+  --chart-5: #fb923c;
+  --radius: 0.5rem;
+  --sidebar: #0c0c10;
+  --sidebar-foreground: #e4e4e7;
+  --sidebar-primary: #34d399;
+  --sidebar-primary-foreground: #052e16;
+  --sidebar-accent: #1a2e1e;
+  --sidebar-accent-foreground: #86efac;
+  --sidebar-border: #27272e;
+  --sidebar-ring: #34d399;
 }
 
+/* ═══════════════════════════════════════════════════
+   DARK THEME — "Dark Terminal"
+   Deep indigo-black base. Emerald signals profit.
+   ═══════════════════════════════════════════════════ */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Surfaces — NAVY, not gray. Every surface has blue in it. */
+  --background: #0b1120;
+  --foreground: #e8ecf4;
+  --card: #131c2e;
+  --card-foreground: #e8ecf4;
+  --popover: #131c2e;
+  --popover-foreground: #e8ecf4;
+
+  /* Primary — Emerald. This is the money color. */
+  --primary: #34d399;
+  --primary-foreground: #052e16;
+
+  /* Secondary surfaces */
+  --secondary: #1a2540;
+  --secondary-foreground: #c8d0e0;
+
+  /* Muted */
+  --muted: #1a2540;
+  --muted-foreground: #8892aa;
+
+  /* Accent — emerald tinted */
+  --accent: #0f2a1e;
+  --accent-foreground: #6ee7b7;
+
+  /* Danger */
+  --destructive: #fb7185;
+
+  /* Borders — blue-tinted, visible */
+  --border: #1e2d4a;
+  --input: #1e2d4a;
+  --ring: #34d399;
+
+  /* Chart palette — distinct, not all green */
+  --chart-1: #34d399;
+  --chart-2: #38bdf8;
+  --chart-3: #fbbf24;
+  --chart-4: #c084fc;
+  --chart-5: #fb923c;
+
+  /* Sidebar — slightly darker than main */
+  --sidebar: #091020;
+  --sidebar-foreground: #c8d0e0;
+  --sidebar-primary: #34d399;
+  --sidebar-primary-foreground: #052e16;
+  --sidebar-accent: #0f2a1e;
+  --sidebar-accent-foreground: #6ee7b7;
+  --sidebar-border: #1e2d4a;
+  --sidebar-ring: #34d399;
 }
 
+/* ═══════════════════════════════════════════════════
+   BASE LAYER
+   ═══════════════════════════════════════════════════ */
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -124,7 +156,175 @@
   body {
     @apply bg-background text-foreground;
   }
-  html {
-    @apply font-sans;
+
+  /* Headings — Sora, tight tracking */
+  h1, h2, h3, h4, h5, h6, .font-heading {
+    font-family: var(--font-heading), system-ui, sans-serif;
+    letter-spacing: -0.025em;
+    font-weight: 600;
   }
+
+  h1 { font-weight: 700; }
+
+  /* All monospace numbers */
+  .font-mono, td, th {
+    font-family: var(--font-mono), ui-monospace, monospace;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   CARDS — Layered glass with emerald hover glow
+   ═══════════════════════════════════════════════════ */
+[data-slot="card"] {
+  background: #131c2e;
+  border: 1px solid #1e2d4a;
+  border-top-color: #263a5c;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+[data-slot="card"]:hover {
+  border-color: #34d39950;
+  box-shadow:
+    0 0 24px #34d39912,
+    0 4px 20px #0a152860;
+}
+
+/* ═══════════════════════════════════════════════════
+   TABLES — Clean, dense, data-forward
+   ═══════════════════════════════════════════════════ */
+table thead tr {
+  border-bottom: 1px solid #1e2d4a !important;
+}
+
+table thead th {
+  color: #6880a8 !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+}
+
+table tbody tr {
+  border-bottom: 1px solid #152035 !important;
+  transition: background 0.15s ease;
+}
+
+table tbody tr:hover {
+  background: #1a2845 !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   PROFIT / LOSS SIGNALS
+   The whole point of this app. Make them GLOW.
+   ═══════════════════════════════════════════════════ */
+.text-green-400 {
+  color: #34d399 !important;
+  text-shadow: 0 0 16px #34d39940, 0 0 4px #34d39920;
+}
+
+.text-red-400 {
+  color: #fb7185 !important;
+  text-shadow: 0 0 16px #fb718540;
+}
+
+/* ═══════════════════════════════════════════════════
+   BADGES — Punchy, readable
+   ═══════════════════════════════════════════════════ */
+[data-slot="badge"] {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+[data-slot="badge"][data-variant="default"] {
+  background: #34d399;
+  color: #052e16;
+  box-shadow: 0 0 10px #34d39930;
+}
+
+[data-slot="badge"][data-variant="outline"] {
+  border-color: #1e2d4a;
+  color: #8892aa;
+}
+
+[data-slot="badge"][data-variant="secondary"] {
+  background: #1a2540;
+  color: #8892aa;
+}
+
+/* ═══════════════════════════════════════════════════
+   LINKS — Emerald. Not blue. Ever.
+   ═══════════════════════════════════════════════════ */
+a.text-blue-400 {
+  color: #34d399 !important;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+a.text-blue-400:hover {
+  color: #6ee7b7 !important;
+  text-decoration: underline;
+  text-decoration-color: #34d39950;
+  text-underline-offset: 3px;
+}
+
+/* External listing links */
+a.text-blue-400[target="_blank"]::after {
+  content: " \2197";
+  font-size: 0.75em;
+  opacity: 0.5;
+}
+
+/* ═══════════════════════════════════════════════════
+   INPUTS / SELECT — Dark, recessed
+   ═══════════════════════════════════════════════════ */
+input[type="search"],
+input[type="text"],
+input[type="number"],
+select {
+  background: #0e1628 !important;
+  border-color: #1e2d4a !important;
+  color: #e8ecf4 !important;
+  transition: border-color 0.2s ease;
+}
+
+input:focus, select:focus {
+  border-color: #34d39960 !important;
+  box-shadow: 0 0 0 2px #34d39918 !important;
+}
+
+/* ═══════════════════════════════════════════════════
+   SCROLLBAR — Thin, subtle
+   ═══════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #1e2d4a;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2a4060;
+}
+
+/* ═══════════════════════════════════════════════════
+   STAT LABELS — The uppercase labels above numbers
+   ═══════════════════════════════════════════════════ */
+.text-muted-foreground.text-xs.uppercase,
+.text-muted-foreground.text-sm.uppercase {
+  color: #52525e !important;
+  letter-spacing: 0.1em;
+}
+
+/* ═══════════════════════════════════════════════════
+   BACKGROUND TEXTURE — Subtle noise grain
+   ═══════════════════════════════════════════════════ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.015;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
 }

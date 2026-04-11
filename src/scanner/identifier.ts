@@ -9,10 +9,13 @@
  *   pick the right product or reject. This is the gate.
  */
 
-import { eq, desc, and, gt } from "drizzle-orm";
+import { eq, desc, and, gt, sql } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "../db/schema";
 import { products, productTypes, pricePoints } from "../db/schema";
+import { embeddingRepo } from "@/db/repos/EmbeddingRepo";
+import { productRepo } from "@/db/repos/ProductRepo";
+import { db as sharedDb } from "@/db/client";
 import type { LlmClient } from "./helpers";
 import type { RawListing } from "../sources/IMarketplaceAdapter";
 import { log, skip, error } from "@/lib/logger";
@@ -158,8 +161,20 @@ export async function extractItems(
       "- If the listing is NOT a product we track (furniture, clothing, Wi-Fi " +
       "equipment, plush toys, board games), return empty items\n" +
       "- If it's a random/mystery lot with no named items, return empty\n" +
+      "- If the title contains 'custom', 'custom card', 'fan made', 'proxy', " +
+      "'replica', 'reprint', 'fake', 'gold plated', or 'gold custom' — " +
+      "this is NOT an authentic product. Return empty items. Custom/fan-made " +
+      "cards have zero resale value in the real market. Do NOT match them " +
+      "to real catalog products.\n" +
       "- If the title mentions 'untested', 'for parts', 'as-is', note that " +
-      "in the metadata — it affects value significantly\n\n" +
+      "in the metadata — it affects value significantly\n" +
+      "- TRADING CARDS (Pokemon, MTG, Yu-Gi-Oh): The SET NAME and CARD NUMBER " +
+      "are the PRIMARY identifiers. 'Charizard VMAX 020/189 Darkness Ablaze' " +
+      "is a completely different product from 'Charizard GX 009/068 Hidden Fates'. " +
+      "Always extract: card name, set name, card number (e.g. 020/189), rarity, " +
+      "edition (1st edition, unlimited), and language. Include set name and card " +
+      "number in the 'name' field (e.g. 'Charizard VMAX 020/189 Darkness Ablaze') " +
+      "AND in the metadata fields. Without set/number, we cannot distinguish cards.\n\n" +
       "## Response format\n\n" +
       '{"items": [{"name": "canonical product name", "product_type": "type_id", ' +
       '"condition": "from valid conditions", "platform": "console or set name", ' +
@@ -177,6 +192,12 @@ export async function extractItems(
           "Completeness matters: every metadata field you fill in helps the " +
           "system pick the right price point (a graded PSA 10 Charizard is " +
           "worth 100x a loose played copy). " +
+          "CRITICAL for trading cards: ALWAYS include the SET NAME and CARD " +
+          "NUMBER in the name field (e.g. 'Charizard VMAX 020/189 Darkness " +
+          "Ablaze'). Without these, the system cannot distinguish between " +
+          "the hundreds of different Charizard cards in the catalog. Each " +
+          "card in a lot is a DISTINCT product — never use the same name " +
+          "for multiple cards. " +
           "Reply with JSON only.",
       },
     );
@@ -235,8 +256,11 @@ function sequenceRatio(a: string, b: string): number {
   let matches = 0;
   const used = new Array<boolean>(longer.length).fill(false);
   for (const ch of shorter) {
-    const idx = longer.indexOf(ch);
-    if (idx !== -1 && !used[idx]) {
+    let idx = -1;
+    for (let j = 0; j < longer.length; j++) {
+      if (longer[j] === ch && !used[j]) { idx = j; break; }
+    }
+    if (idx !== -1) {
       matches++;
       used[idx] = true;
     }
@@ -244,37 +268,29 @@ function sequenceRatio(a: string, b: string): number {
   return (2 * matches) / (shorter.length + longer.length);
 }
 
-/** Search products_fts using SQLite FTS5 via the raw better-sqlite3 instance. */
+/** Search products_fts using SQLite FTS5 via Drizzle's sql tagged template. */
 function searchFts(
-  db: Db,
+  _db: Db,
   query: string,
   productType: string,
   limit: number,
 ): Array<{ productId: string; title: string; platform: string; rank: number }> {
   try {
-    // Access the underlying better-sqlite3 instance through drizzle's internal session
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sqlite = (db as any).session?.client ?? (db as any)._session?.client;
-    if (!sqlite) return [];
-
     const clean = query.replace(/"/g, '""');
-    let sql =
-      "SELECT product_id, title, platform, rank FROM products_fts WHERE products_fts MATCH ?";
-    const params: unknown[] = [clean];
 
-    if (productType) {
-      sql += " AND product_type_id = ?";
-      params.push(productType);
-    }
-    sql += " ORDER BY rank LIMIT ?";
-    params.push(limit);
-
-    const rows = (sqlite.prepare(sql).all as (...args: unknown[]) => Array<{
-      product_id: string;
-      title: string;
-      platform: string;
-      rank: number;
-    }>)(...params);
+    const rows = productType
+      ? sharedDb.all<{
+          product_id: string;
+          title: string;
+          platform: string;
+          rank: number;
+        }>(sql`SELECT product_id, title, platform, rank FROM products_fts WHERE products_fts MATCH ${clean} AND product_type_id = ${productType} ORDER BY rank LIMIT ${limit}`)
+      : sharedDb.all<{
+          product_id: string;
+          title: string;
+          platform: string;
+          rank: number;
+        }>(sql`SELECT product_id, title, platform, rank FROM products_fts WHERE products_fts MATCH ${clean} ORDER BY rank LIMIT ${limit}`);
 
     return rows.map((r) => ({
       productId: r.product_id,
@@ -289,56 +305,47 @@ function searchFts(
 
 /**
  * Search products by vector embedding similarity.
- * Returns candidates ordered by distance (lowest = most similar).
+ * Computes query embedding via Ollama, then finds nearest neighbors
+ * using cosine similarity through the EmbeddingRepo.
  */
-function searchEmbeddings(
+async function searchEmbeddings(
   db: Db,
   query: string,
   limit: number,
-): Array<{ productId: string; title: string; platform: string; distance: number }> {
+): Promise<Array<{ productId: string; title: string; platform: string; distance: number }>> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sqlite = (db as any).session?.client ?? (db as any)._session?.client;
-    if (!sqlite) return [];
-
-    // Load sqlite-vec extension
-    const vec = require("sqlite-vec");
-    vec.load(sqlite);
-
-    // Get or compute embedding (cached)
-    const { initEmbeddingCache, getOrComputeEmbedding } = require("../db/embedding_cache");
-    initEmbeddingCache(sqlite);
     const ollamaUrl = process.env.OLLAMA_URL || "http://battleaxe:11434";
-    const vec_data = getOrComputeEmbedding(sqlite, query, ollamaUrl);
-    if (!vec_data || !vec_data.length) return [];
 
-    // Pack floats to buffer
-    const buf = Buffer.alloc(vec_data.length * 4);
-    for (let i = 0; i < vec_data.length; i++) {
-      buf.writeFloatLE(vec_data[i], i * 4);
+    // Compute query embedding (transient — not stored)
+    const resp = await fetch(`${ollamaUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "qwen3-embedding:8b", input: query }),
+    });
+    if (!resp.ok) return [];
+    const data = (await resp.json()) as { embeddings?: number[][] };
+    const queryVec = data.embeddings?.[0];
+    if (!queryVec?.length) return [];
+
+    // Find similar products via repo (cosine similarity)
+    const similar = await embeddingRepo.findSimilar("product", queryVec, limit);
+    if (!similar.length) return [];
+
+    // Hydrate with product details
+    const results: Array<{ productId: string; title: string; platform: string; distance: number }> = [];
+    for (const match of similar) {
+      const product = await productRepo.findById(match.entityId);
+      if (product) {
+        results.push({
+          productId: product.id,
+          title: product.title,
+          platform: product.platform ?? "",
+          distance: match.distance,
+        });
+      }
     }
 
-    const rows = sqlite
-      .prepare(
-        `SELECT pe.product_id, p.title, p.platform, pe.distance
-         FROM product_embeddings pe
-         JOIN products p ON p.id = pe.product_id
-         WHERE pe.embedding MATCH ? AND k = ?
-         ORDER BY pe.distance`,
-      )
-      .all(buf, limit) as Array<{
-      product_id: string;
-      title: string;
-      platform: string;
-      distance: number;
-    }>;
-
-    return rows.map((r) => ({
-      productId: r.product_id,
-      title: r.title,
-      platform: r.platform,
-      distance: r.distance,
-    }));
+    return results;
   } catch {
     return [];
   }
@@ -354,19 +361,37 @@ function searchEmbeddings(
  *
  * Returns Map<itemIndex, CatalogCandidate[]> with topN candidates per item.
  */
-export function matchCandidates(
+export async function matchCandidates(
   extracted: ExtractedItem[],
   db: Db,
   topN = 5,
-): Map<number, CatalogCandidate[]> {
+): Promise<Map<number, CatalogCandidate[]>> {
   const results = new Map<number, CatalogCandidate[]>();
   if (!extracted.length) return results;
 
   for (let idx = 0; idx < extracted.length; idx++) {
     const item = extracted[idx];
-    const searchTerms = item.platform
-      ? `${item.name} ${item.platform}`
-      : item.name;
+    // Build search terms — for trading cards, include set name and card number
+    // to avoid matching every card to the same generic product
+    const isCardType = ["pokemon_card", "mtg_card", "yugioh_card", "onepiece_card", "sports_card"].includes(item.productType);
+    let searchTerms = item.name;
+    if (isCardType) {
+      const setName = item.metadata["set_name"] as string | undefined;
+      const cardNumber = item.metadata["card_number"] as string | undefined;
+      const rarity = item.metadata["rarity"] as string | undefined;
+      if (setName && !searchTerms.toLowerCase().includes(setName.toLowerCase())) {
+        searchTerms += ` ${setName}`;
+      }
+      if (cardNumber && !searchTerms.includes(cardNumber)) {
+        searchTerms += ` ${cardNumber}`;
+      }
+      if (rarity && !searchTerms.toLowerCase().includes(rarity.toLowerCase())) {
+        searchTerms += ` ${rarity}`;
+      }
+    }
+    if (item.platform) {
+      searchTerms += ` ${item.platform}`;
+    }
 
     log("identifier/s2", `item [${idx + 1}/${extracted.length}]: searching catalog for "${searchTerms}"`);
     let candidates: CatalogCandidate[] = [];
@@ -422,7 +447,7 @@ export function matchCandidates(
     if (candidates.length < topN) {
       log("identifier/s2", `FTS5 yielded only ${candidates.length} candidates (< topN ${topN}), trying embeddings`);
       try {
-        const vecCandidates = searchEmbeddings(db, searchTerms, topN * 2);
+        const vecCandidates = await searchEmbeddings(db, searchTerms, topN * 2);
         log("identifier/s2", `embeddings returned ${vecCandidates.length} result(s)`);
         let addedFromVec = 0;
         for (const vc of vecCandidates) {
@@ -505,6 +530,35 @@ export function matchCandidates(
     results.set(idx, topCandidates);
   }
 
+  // Dedup: if the same product is the #1 candidate for multiple items,
+  // that's almost certainly an over-match (e.g., every Pokemon card matching
+  // "Pokemon Zany Cards"). Demote duplicates so only the highest-scoring
+  // item keeps it as #1; others get it pushed down.
+  if (extracted.length > 1) {
+    const topProductCounts = new Map<string, { bestScore: number; bestIdx: number }>();
+    for (const [idx, cands] of results) {
+      if (!cands.length) continue;
+      const topId = cands[0].productId;
+      const topScore = cands[0].score;
+      const existing = topProductCounts.get(topId);
+      if (!existing || topScore > existing.bestScore) {
+        topProductCounts.set(topId, { bestScore: topScore, bestIdx: idx });
+      }
+    }
+    for (const [idx, cands] of results) {
+      if (!cands.length) continue;
+      const topId = cands[0].productId;
+      const best = topProductCounts.get(topId);
+      if (best && best.bestIdx !== idx) {
+        // This item has the same #1 as another item with a higher score.
+        // Remove the duplicate product from this item's candidates entirely.
+        const filtered = cands.filter((c) => c.productId !== topId);
+        results.set(idx, filtered);
+        log("identifier/s2", `dedup: removed "${cands[0].title}" from item ${idx + 1} (duplicate of item ${best.bestIdx + 1})`);
+      }
+    }
+  }
+
   return results;
 }
 
@@ -581,21 +635,31 @@ export async function confirmMatches(
     lines.push(`  ${String.fromCharCode(65 + cands.length)}) None of these`);
   }
 
-  // Get valid conditions from DB for the response format
-  let conditionHint = "loose, cib, new_sealed, graded";
-  if (extracted.length) {
-    const ptId = extracted[0].productType;
+  // Build per-item condition hints from DB
+  const defaultConditionHint = "loose, cib, new_sealed, graded";
+  const conditionHintMap = new Map<number, string>();
+  const ptCache = new Map<string, string>();
+  for (let idx = 0; idx < extracted.length; idx++) {
+    const ptId = extracted[idx].productType;
     if (ptId) {
-      const pt = db
-        .select()
-        .from(productTypes)
-        .where(eq(productTypes.id, ptId))
-        .limit(1)
-        .all()[0];
-      if (pt?.conditionSchema?.length) {
-        conditionHint = pt.conditionSchema.join(", ");
+      if (!ptCache.has(ptId)) {
+        const pt = db
+          .select()
+          .from(productTypes)
+          .where(eq(productTypes.id, ptId))
+          .limit(1)
+          .all()[0];
+        ptCache.set(ptId, pt?.conditionSchema?.length ? pt.conditionSchema.join(", ") : defaultConditionHint);
       }
+      conditionHintMap.set(idx, ptCache.get(ptId)!);
+    } else {
+      conditionHintMap.set(idx, defaultConditionHint);
     }
+  }
+
+  // Append per-item valid conditions to the prompt lines
+  for (let idx = 0; idx < extracted.length; idx++) {
+    lines.push(`  Valid conditions for item ${idx + 1}: ${conditionHintMap.get(idx) ?? defaultConditionHint}`);
   }
 
   const perItemLine =
@@ -619,8 +683,15 @@ export async function confirmMatches(
     "- Pick the catalog product that BEST matches the extracted item\n" +
     "- Reject (null) if no candidate is the right product\n" +
     "- Reject if the listing is a reproduction, fake, or unrelated item\n" +
+    "- TRADING CARDS (Pokemon, MTG, Yu-Gi-Oh, etc.): A match is ONLY valid " +
+    "if the SET NAME and CARD NUMBER match or are very close. " +
+    "'Charizard VMAX 020/189 Darkness Ablaze' does NOT match 'Charizard GX " +
+    "009/068 Hidden Fates' — these are completely different products worth " +
+    "different amounts. If the catalog candidate is a generic product like " +
+    "'Pokemon Zany Cards' or a compilation/accessory and the extracted item " +
+    "is a specific card, REJECT the match. Different set = different product.\n" +
     "- Confirm the condition based on the listing context\n" +
-    `  Valid conditions: ${conditionHint}\n\n` +
+    "- Use the valid conditions listed per item above\n\n" +
     "## Response\n\n" +
     '{"matches": [{"item": 1, "choice": "A", "condition": "condition_value"}, ...]}\n' +
     "Use null for choice if no match.";
@@ -636,6 +707,16 @@ export async function confirmMatches(
         "worthless thinking it's valuable — that costs real money. A false " +
         "negative means we miss a deal — that's fine, there will be more. " +
         "When in doubt, reject. Only confirm matches you're confident about. " +
+        "CRITICAL for trading cards: every unique card has a specific set " +
+        "name and card number. Do NOT match a specific card to a generic " +
+        "product (e.g. 'Pokemon Zany Cards', 'Pokemon Card Game'). Do NOT " +
+        "match cards from different sets even if they feature the same " +
+        "character. If the set or number doesn't match, reject. " +
+        "CRITICAL: if the listing says 'custom', 'custom card', 'fan made', " +
+        "'proxy', 'replica', 'reprint', 'gold custom', or 'gold plated' — " +
+        "REJECT. These are worthless fakes. A 'Pokemon Gold Custom Pikachu " +
+        "Card' is NOT a real Pikachu card. Never match custom/fan-made " +
+        "items to real catalog products. " +
         "Reply with JSON only.",
     });
 
@@ -725,7 +806,7 @@ export async function identifyAndMatch(
   log("identifier", `stage 1 complete: ${extracted.length} item(s) extracted`);
 
   // Stage 2: Match candidates from catalog (FTS5 if available)
-  const candidateMap = matchCandidates(extracted, db);
+  const candidateMap = await matchCandidates(extracted, db);
   const totalCandidates = [...candidateMap.values()].reduce((s, v) => s + v.length, 0);
   if (!totalCandidates) {
     log("identifier", `stage 2 found no candidates for any item — skipping stage 3`);

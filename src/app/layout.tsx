@@ -1,30 +1,30 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
+import { Sora, Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { SidebarNav } from "@/components/SidebarNav";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const sora = Sora({
+  variable: "--font-heading",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const instrumentSans = Instrument_Sans({
+  variable: "--font-body",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-mono",
+  subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
   title: "Arbitrage Scout",
   description: "Collectibles arbitrage opportunity tracker",
 };
-
-const navLinks = [
-  { href: "/", label: "Dashboard", icon: "⬡" },
-  { href: "/opportunities", label: "Opportunities", icon: "◆" },
-  { href: "/products", label: "Products", icon: "◈" },
-  { href: "/scans", label: "Scans", icon: "◎" },
-  { href: "/platforms", label: "Platforms", icon: "◇" },
-];
 
 export default function RootLayout({
   children,
@@ -34,39 +34,72 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${sora.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full flex bg-background text-foreground">
+      <body
+        className="min-h-full flex bg-background text-foreground"
+        style={{ fontFamily: "var(--font-body), system-ui, sans-serif" }}
+      >
         {/* Sidebar */}
-        <aside className="w-56 shrink-0 flex flex-col border-r border-border bg-card">
-          <div className="px-5 py-5 border-b border-border">
-            <span className="text-xs font-mono font-semibold tracking-widest text-muted-foreground uppercase">
-              Arbitrage
-            </span>
-            <h1 className="text-lg font-bold leading-tight text-foreground">
-              Scout
-            </h1>
-          </div>
-          <nav className="flex-1 py-4 px-2 space-y-0.5">
-            {navLinks.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        <aside
+          className="w-48 shrink-0 flex flex-col border-r"
+          style={{ background: "#091020", borderColor: "#1e2d4a" }}
+        >
+          {/* Brand */}
+          <div className="px-4 py-4 border-b" style={{ borderColor: "#262a36" }}>
+            <div className="flex items-center gap-2.5">
+              <div
+                className="w-7 h-7 rounded-md flex items-center justify-center"
+                style={{ background: "linear-gradient(135deg, #34d399, #059669)" }}
               >
-                <span className="text-xs opacity-60">{link.icon}</span>
-                {link.label}
-              </Link>
-            ))}
-          </nav>
-          <div className="px-4 py-3 border-t border-border">
-            <p className="text-[10px] text-muted-foreground/50 font-mono">
-              arbitrage-scout-ts
-            </p>
+                <span className="text-[11px] font-bold" style={{ color: "#052e16" }}>
+                  AS
+                </span>
+              </div>
+              <div>
+                <h1
+                  className="text-[13px] font-semibold leading-none tracking-tight"
+                  style={{ fontFamily: "var(--font-heading)", color: "#e4e4e7" }}
+                >
+                  Scout
+                </h1>
+                <span
+                  className="text-[9px] tracking-[0.08em] uppercase"
+                  style={{ color: "#34d399" }}
+                >
+                  arbitrage
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Nav (client component for active state) */}
+          <SidebarNav />
+
+          {/* Status */}
+          <div className="px-4 py-3 border-t" style={{ borderColor: "#262a36" }}>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <div
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: "#34d399" }}
+                />
+                <div
+                  className="absolute inset-0 w-1.5 h-1.5 rounded-full animate-ping"
+                  style={{ background: "#34d399", opacity: 0.4 }}
+                />
+              </div>
+              <span
+                className="text-[10px]"
+                style={{ color: "#52525e", fontFamily: "var(--font-mono)" }}
+              >
+                live
+              </span>
+            </div>
           </div>
         </aside>
 
-        {/* Main content */}
+        {/* Main */}
         <main className="flex-1 flex flex-col min-w-0 overflow-auto">
           {children}
         </main>

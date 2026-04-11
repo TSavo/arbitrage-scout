@@ -22,6 +22,8 @@ export default async function OpportunitiesPage() {
       marketPriceUsd: opportunities.marketPriceUsd,
       profitUsd: opportunities.profitUsd,
       marginPct: opportunities.marginPct,
+      potentialProfitUsd: opportunities.potentialProfitUsd,
+      potentialMarginPct: opportunities.potentialMarginPct,
       status: opportunities.status,
       flags: opportunities.flags,
       foundAt: opportunities.foundAt,
@@ -105,6 +107,7 @@ export default async function OpportunitiesPage() {
 
   const tableRows: OpportunityRow[] = fullRows.map((r) => ({
     id: r.id,
+    productId: r.productId,
     listingTitle: r.listingTitle,
     productTitle: r.productTitle ?? r.listingTitle,
     productPlatform: r.productPlatform ?? "",
@@ -115,6 +118,8 @@ export default async function OpportunitiesPage() {
     marketPriceUsd: r.marketPriceUsd,
     profitUsd: r.profitUsd,
     marginPct: r.marginPct,
+    potentialProfitUsd: r.potentialProfitUsd,
+    potentialMarginPct: r.potentialMarginPct,
     status: r.status,
     flags: r.flags as string[],
     foundAt: r.foundAt,

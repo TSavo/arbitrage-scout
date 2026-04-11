@@ -8,7 +8,9 @@
  * - Supply constraints (fewer copies = scarcer = eventual price increase)
  */
 
-import Database from "better-sqlite3";
+import { and, eq, gte, sql, desc, asc } from "drizzle-orm";
+import { db } from "@/db/client";
+import { products, pricePoints } from "@/db/schema";
 import { log, section } from "@/lib/logger";
 
 export interface PlatformProfile {
@@ -31,46 +33,31 @@ export interface PlatformProfile {
  * Profile every platform in the catalog.
  */
 export function profilePlatforms(
-  sqliteDb: Database.Database,
   opts: { productType?: string; minProducts?: number } = {},
 ): PlatformProfile[] {
   const minProducts = opts.minProducts ?? 20;
 
   section("PLATFORM ANALYSIS");
 
-  let typeFilter = "";
-  const params: unknown[] = [];
+  // Alias tables for the three condition joins
+  const ppLoose = db.$with("pp_loose").as(
+    db
+      .select({
+        productId: pricePoints.productId,
+        priceUsd: pricePoints.priceUsd,
+      })
+      .from(pricePoints)
+      .where(and(eq(pricePoints.condition, "loose"), gte(pricePoints.priceUsd, 0.01))),
+  );
+
+  // Build conditions for main query
+  const conditions = [sql`pp_loose.price_usd IS NOT NULL`];
   if (opts.productType) {
-    typeFilter = "AND p.product_type_id = ?";
-    params.push(opts.productType);
+    conditions.push(eq(products.productTypeId, opts.productType));
   }
 
-  // Get platform stats
-  const platforms = sqliteDb
-    .prepare(
-      `SELECT
-         p.platform,
-         p.product_type_id,
-         COUNT(DISTINCT p.id) as product_count,
-         ROUND(AVG(pp_loose.price_usd), 2) as avg_loose,
-         ROUND(AVG(pp_cib.price_usd), 2) as avg_cib,
-         ROUND(AVG(pp_new.price_usd), 2) as avg_new,
-         SUM(p.sales_volume) as total_volume,
-         ROUND(AVG(p.sales_volume), 1) as avg_volume
-       FROM products p
-       LEFT JOIN price_points pp_loose ON pp_loose.product_id = p.id
-         AND pp_loose.condition = 'loose' AND pp_loose.price_usd > 0
-       LEFT JOIN price_points pp_cib ON pp_cib.product_id = p.id
-         AND pp_cib.condition = 'cib' AND pp_cib.price_usd > 0
-       LEFT JOIN price_points pp_new ON pp_new.product_id = p.id
-         AND pp_new.condition = 'new_sealed' AND pp_new.price_usd > 0
-       WHERE pp_loose.price_usd IS NOT NULL
-         ${typeFilter}
-       GROUP BY p.platform, p.product_type_id
-       HAVING product_count >= ${minProducts}
-       ORDER BY avg_loose ASC`,
-    )
-    .all(...params) as Array<{
+  // Get platform stats using Drizzle sql template for complex aggregates
+  const platforms = db.all<{
     platform: string;
     product_type_id: string;
     product_count: number;
@@ -79,7 +66,29 @@ export function profilePlatforms(
     avg_new: number | null;
     total_volume: number;
     avg_volume: number;
-  }>;
+  }>(sql`
+    SELECT
+      p.platform,
+      p.product_type_id,
+      COUNT(DISTINCT p.id) as product_count,
+      ROUND(AVG(pp_loose.price_usd), 2) as avg_loose,
+      ROUND(AVG(pp_cib.price_usd), 2) as avg_cib,
+      ROUND(AVG(pp_new.price_usd), 2) as avg_new,
+      SUM(p.sales_volume) as total_volume,
+      ROUND(AVG(p.sales_volume), 1) as avg_volume
+    FROM products p
+    LEFT JOIN price_points pp_loose ON pp_loose.product_id = p.id
+      AND pp_loose.condition = 'loose' AND pp_loose.price_usd > 0
+    LEFT JOIN price_points pp_cib ON pp_cib.product_id = p.id
+      AND pp_cib.condition = 'cib' AND pp_cib.price_usd > 0
+    LEFT JOIN price_points pp_new ON pp_new.product_id = p.id
+      AND pp_new.condition = 'new_sealed' AND pp_new.price_usd > 0
+    WHERE pp_loose.price_usd IS NOT NULL
+      ${opts.productType ? sql`AND p.product_type_id = ${opts.productType}` : sql``}
+    GROUP BY p.platform, p.product_type_id
+    HAVING product_count >= ${minProducts}
+    ORDER BY avg_loose ASC
+  `);
 
   const profiles: PlatformProfile[] = [];
 
@@ -87,43 +96,37 @@ export function profilePlatforms(
     log("platforms", `profiling ${plat.platform} (${plat.product_count} products)...`);
 
     // Median loose price
-    const medianRow = sqliteDb
-      .prepare(
-        `SELECT pp.price_usd FROM price_points pp
-         JOIN products p ON p.id = pp.product_id
-         WHERE p.platform = ? AND pp.condition = 'loose' AND pp.price_usd > 0
-         ORDER BY pp.price_usd
-         LIMIT 1 OFFSET (
-           SELECT COUNT(*)/2 FROM price_points pp2
-           JOIN products p2 ON p2.id = pp2.product_id
-           WHERE p2.platform = ? AND pp2.condition = 'loose' AND pp2.price_usd > 0
-         )`,
+    const medianRow = db.get<{ price_usd: number }>(sql`
+      SELECT pp.price_usd FROM price_points pp
+      JOIN products p ON p.id = pp.product_id
+      WHERE p.platform = ${plat.platform} AND pp.condition = 'loose' AND pp.price_usd > 0
+      ORDER BY pp.price_usd
+      LIMIT 1 OFFSET (
+        SELECT COUNT(*)/2 FROM price_points pp2
+        JOIN products p2 ON p2.id = pp2.product_id
+        WHERE p2.platform = ${plat.platform} AND pp2.condition = 'loose' AND pp2.price_usd > 0
       )
-      .get(plat.platform, plat.platform) as { price_usd: number } | undefined;
+    `);
 
     // % above $50 and $100
-    const thresholds = sqliteDb
-      .prepare(
-        `SELECT
-           SUM(CASE WHEN pp.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_50,
-           SUM(CASE WHEN pp.price_usd >= 100 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_100
-         FROM price_points pp
-         JOIN products p ON p.id = pp.product_id
-         WHERE p.platform = ? AND pp.condition = 'loose' AND pp.price_usd > 0`,
-      )
-      .get(plat.platform) as { pct_50: number; pct_100: number };
+    const thresholds = db.get<{ pct_50: number; pct_100: number }>(sql`
+      SELECT
+        SUM(CASE WHEN pp.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_50,
+        SUM(CASE WHEN pp.price_usd >= 100 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_100
+      FROM price_points pp
+      JOIN products p ON p.id = pp.product_id
+      WHERE p.platform = ${plat.platform} AND pp.condition = 'loose' AND pp.price_usd > 0
+    `);
 
     // Top 5 by volume
-    const top5 = sqliteDb
-      .prepare(
-        `SELECT p.title, pp.price_usd as loose_price, p.sales_volume as volume
-         FROM products p
-         JOIN price_points pp ON pp.product_id = p.id
-         WHERE p.platform = ? AND pp.condition = 'loose' AND pp.price_usd > 0
-         ORDER BY p.sales_volume DESC
-         LIMIT 5`,
-      )
-      .all(plat.platform) as Array<{ title: string; loose_price: number; volume: number }>;
+    const top5 = db.all<{ title: string; loose_price: number; volume: number }>(sql`
+      SELECT p.title, pp.price_usd as loose_price, p.sales_volume as volume
+      FROM products p
+      JOIN price_points pp ON pp.product_id = p.id
+      WHERE p.platform = ${plat.platform} AND pp.condition = 'loose' AND pp.price_usd > 0
+      ORDER BY p.sales_volume DESC
+      LIMIT 5
+    `);
 
     profiles.push({
       platform: plat.platform,
@@ -136,8 +139,8 @@ export function profilePlatforms(
       cibToLooseRatio: plat.avg_cib && plat.avg_loose ? plat.avg_cib / plat.avg_loose : 0,
       totalVolume: plat.total_volume,
       avgVolume: plat.avg_volume,
-      pctAbove50: thresholds.pct_50,
-      pctAbove100: thresholds.pct_100,
+      pctAbove50: thresholds?.pct_50 ?? 0,
+      pctAbove100: thresholds?.pct_100 ?? 0,
       top5Products: top5.map((t) => ({
         title: t.title,
         loosePrice: t.loose_price,
@@ -154,10 +157,9 @@ export function profilePlatforms(
  * These are the ones most likely to appreciate.
  */
 export function findUndervaluedPlatforms(
-  sqliteDb: Database.Database,
   opts: { productType?: string } = {},
 ): PlatformProfile[] {
-  const profiles = profilePlatforms(sqliteDb, { ...opts, minProducts: 30 });
+  const profiles = profilePlatforms({ ...opts, minProducts: 30 });
 
   // Score each platform: high volume + low median price = undervalued
   // Normalize both to 0-1 range, then combine

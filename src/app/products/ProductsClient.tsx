@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   Table,
   TableBody,
@@ -10,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Sparkline } from "@/components/Sparkline";
 
 type ProductRow = {
   id: string;
@@ -19,6 +21,7 @@ type ProductRow = {
   salesVolume: number;
   createdAt: string;
   prices: Record<string, number>;
+  priceHistory?: { value: number }[];
 };
 
 function fmt(n: number | undefined) {
@@ -86,6 +89,7 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
               <TableHead className="text-xs text-right">Loose</TableHead>
               <TableHead className="text-xs text-right">CIB</TableHead>
               <TableHead className="text-xs text-right">New</TableHead>
+              <TableHead className="text-xs text-center">Trend</TableHead>
               <TableHead
                 className="text-xs text-right cursor-pointer hover:text-foreground"
                 onClick={() => handleSort("volume")}
@@ -98,7 +102,7 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
             {filtered.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-10 text-sm"
                 >
                   No products found.
@@ -108,7 +112,12 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
             {filtered.map((row) => (
               <TableRow key={row.id} className="hover:bg-accent/20 transition-colors">
                 <TableCell className="max-w-[300px]">
-                  <span className="text-sm truncate block">{row.title}</span>
+                  <Link
+                    href={`/products/${encodeURIComponent(row.id)}`}
+                    className="text-sm truncate block text-blue-400 hover:underline"
+                  >
+                    {row.title}
+                  </Link>
                 </TableCell>
                 <TableCell>
                   {row.platform ? (
@@ -132,6 +141,22 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm">
                   {fmt(row.prices["new"] ?? row.prices["New"])}
+                </TableCell>
+                <TableCell className="text-center">
+                  {row.priceHistory && row.priceHistory.length >= 2 ? (
+                    <div className="flex justify-center">
+                      <Sparkline
+                        data={row.priceHistory}
+                        color={
+                          row.priceHistory[row.priceHistory.length - 1].value >= row.priceHistory[0].value
+                            ? "#22c55e"
+                            : "#ef4444"
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm text-muted-foreground">
                   {row.salesVolume.toLocaleString()}

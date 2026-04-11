@@ -41,15 +41,28 @@ export default async function ProductsPage() {
 
   // Build map: productId -> condition -> latest price
   const priceMap = new Map<string, Record<string, number>>();
+  // Build sparkline data: productId -> chronological loose prices
+  const historyMap = new Map<string, { date: string; value: number }[]>();
   for (const p of prices) {
     if (!priceMap.has(p.productId)) priceMap.set(p.productId, {});
     const cond = priceMap.get(p.productId)!;
     if (!(p.condition in cond)) cond[p.condition] = p.priceUsd;
+
+    // Collect loose prices for sparkline
+    if (p.condition === "loose") {
+      if (!historyMap.has(p.productId)) historyMap.set(p.productId, []);
+      historyMap.get(p.productId)!.push({ date: p.recordedAt, value: p.priceUsd });
+    }
+  }
+  // Sort sparkline data chronologically
+  for (const [, arr] of historyMap) {
+    arr.sort((a, b) => a.date.localeCompare(b.date));
   }
 
   const tableRows = rows.map((r) => ({
     ...r,
     prices: priceMap.get(r.id) ?? {},
+    priceHistory: historyMap.get(r.id)?.map(({ value }) => ({ value })),
   }));
 
   return (

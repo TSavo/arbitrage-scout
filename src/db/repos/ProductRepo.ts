@@ -135,6 +135,57 @@ export class ProductRepo implements IRepository<Product, string> {
       orderBy: (p, { desc }) => [desc(p.salesVolume)],
     });
   }
+  /**
+   * Get platform statistics aggregated by platform and product type.
+   * Joins products with price_points to compute aggregates.
+   */
+  async getPlatformStats(): Promise<
+    Array<{
+      platform: string;
+      productTypeId: string;
+      productCount: number;
+      avgLoose: number;
+      totalVolume: number;
+      avgVolume: number;
+      pctAbove50: number;
+      pctAbove100: number;
+    }>
+  > {
+    const rows = await db
+      .select({
+        platform: products.platform,
+        productTypeId: products.productTypeId,
+        productCount: sql<number>`cast(count(distinct ${products.id}) as integer)`,
+        avgLoose: sql<number>`round(avg(${pricePoints.priceUsd}), 2)`,
+        totalVolume: sql<number>`cast(coalesce(sum(${products.salesVolume}), 0) as integer)`,
+        avgVolume: sql<number>`round(avg(${products.salesVolume}), 1)`,
+        pctAbove50: sql<number>`round(sum(case when ${pricePoints.priceUsd} >= 50 then 1 else 0 end) * 100.0 / count(*), 1)`,
+        pctAbove100: sql<number>`round(sum(case when ${pricePoints.priceUsd} >= 100 then 1 else 0 end) * 100.0 / count(*), 1)`,
+      })
+      .from(products)
+      .innerJoin(
+        pricePoints,
+        and(
+          eq(pricePoints.productId, products.id),
+          eq(pricePoints.condition, "loose"),
+          gte(pricePoints.priceUsd, 0.01),
+        ),
+      )
+      .groupBy(products.platform, products.productTypeId)
+      .having(sql`count(distinct ${products.id}) >= 20`)
+      .orderBy(sql`avg(${products.salesVolume}) desc`);
+
+    return rows.map((r) => ({
+      platform: r.platform ?? "",
+      productTypeId: r.productTypeId,
+      productCount: r.productCount,
+      avgLoose: r.avgLoose,
+      totalVolume: r.totalVolume,
+      avgVolume: r.avgVolume,
+      pctAbove50: r.pctAbove50,
+      pctAbove100: r.pctAbove100,
+    }));
+  }
 }
 
 export const productRepo = new ProductRepo();

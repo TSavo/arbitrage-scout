@@ -12,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ScanButtons } from "./ScansClient";
+import { CommandCenter } from "./ScansClient";
 
 function duration(start: string, end: string | null) {
   if (!end) return "running…";
@@ -51,15 +51,14 @@ export default async function ScansPage() {
 
   return (
     <div className="p-6 space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Scans</h2>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Scan history and controls
-          </p>
-        </div>
-        <ScanButtons />
+      <div>
+        <h2 className="text-2xl font-semibold tracking-tight">Command Center</h2>
+        <p className="text-muted-foreground text-sm mt-0.5">
+          Trigger scans, imports, and analysis
+        </p>
       </div>
+
+      <CommandCenter />
 
       <div className="rounded-md border border-border overflow-hidden">
         <Table>

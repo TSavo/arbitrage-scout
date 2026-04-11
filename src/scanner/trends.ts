@@ -3,11 +3,8 @@
  * Surfaces products with significant price changes.
  */
 
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq, and, desc, sql } from "drizzle-orm";
-import * as schema from "../db/schema";
-import { products, pricePoints } from "../db/schema";
+import { pricePointRepo } from "@/db/repos/PricePointRepo";
+import { productRepo } from "@/db/repos/ProductRepo";
 import { log, section } from "@/lib/logger";
 
 export interface PriceMover {
@@ -27,8 +24,7 @@ export interface PriceMover {
  * Find products whose price changed significantly between two dates.
  * Call after loading a fresh PriceCharting CSV.
  */
-export function detectTrends(
-  sqliteDb: Database.Database,
+export async function detectTrends(
   opts: {
     minChangePct?: number;
     minChangeUsd?: number;
@@ -36,7 +32,7 @@ export function detectTrends(
     limit?: number;
     productType?: string;
   } = {},
-): { risers: PriceMover[]; fallers: PriceMover[] } {
+): Promise<{ risers: PriceMover[]; fallers: PriceMover[] }> {
   const minPct = opts.minChangePct ?? 10;
   const minUsd = opts.minChangeUsd ?? 5;
   const condition = opts.condition ?? "loose";
@@ -44,80 +40,58 @@ export function detectTrends(
 
   section("TREND DETECTION");
 
-  // Find the two most recent distinct dates in price_points
-  const dates = sqliteDb
-    .prepare(
-      `SELECT DISTINCT recorded_at FROM price_points
-       WHERE condition = ? AND source = 'pricecharting'
-       ORDER BY recorded_at DESC LIMIT 2`,
-    )
-    .all(condition) as { recorded_at: string }[];
+  // Get price changes between two most recent dates
+  const changes = await pricePointRepo.findPriceChanges({
+    condition,
+    minPriceUsd: 5,
+    limit: 10_000, // get all, filter below
+  });
 
-  if (dates.length < 2) {
+  if (changes.length === 0) {
     log("trends", "need at least 2 days of price data — run stock twice");
     return { risers: [], fallers: [] };
   }
 
-  const currentDate = dates[0].recorded_at;
-  const previousDate = dates[1].recorded_at;
+  const currentDate = changes[0].newDate;
+  const previousDate = changes[0].oldDate;
   log("trends", `comparing ${previousDate} → ${currentDate}`);
 
-  // Find products with price changes
-  let typeFilter = "";
-  const params: unknown[] = [condition, currentDate, condition, previousDate];
+  // Build a set of product IDs for type filtering
+  let typeProductIds: Set<string> | null = null;
   if (opts.productType) {
-    typeFilter = "AND p.product_type_id = ?";
-    params.push(opts.productType);
+    const typeProducts = await productRepo.findByType(opts.productType, { limit: 100_000 });
+    typeProductIds = new Set(typeProducts.map((p) => p.id));
   }
 
-  const movers = sqliteDb
-    .prepare(
-      `SELECT
-         p.id as product_id,
-         p.title,
-         p.platform,
-         pp_old.price_usd as previous_price,
-         pp_new.price_usd as current_price,
-         (pp_new.price_usd - pp_old.price_usd) as change_usd,
-         ((pp_new.price_usd - pp_old.price_usd) / pp_old.price_usd * 100) as change_pct
-       FROM products p
-       JOIN price_points pp_new ON pp_new.product_id = p.id
-         AND pp_new.condition = ? AND pp_new.recorded_at = ?
-       JOIN price_points pp_old ON pp_old.product_id = p.id
-         AND pp_old.condition = ? AND pp_old.recorded_at = ?
-       WHERE pp_old.price_usd > 5
-         AND ABS(pp_new.price_usd - pp_old.price_usd) >= ${minUsd}
-         AND ABS((pp_new.price_usd - pp_old.price_usd) / pp_old.price_usd * 100) >= ${minPct}
-         ${typeFilter}
-       ORDER BY change_pct DESC`,
-    )
-    .all(...params) as Array<{
-    product_id: string;
-    title: string;
-    platform: string;
-    previous_price: number;
-    current_price: number;
-    change_usd: number;
-    change_pct: number;
-  }>;
-
+  // Look up product details for each change
   const risers: PriceMover[] = [];
   const fallers: PriceMover[] = [];
 
-  for (const m of movers) {
+  for (const c of changes) {
+    if (typeProductIds && !typeProductIds.has(c.productId)) continue;
+
+    const changeUsd = c.newPrice - c.oldPrice;
+    const changePct = (changeUsd / c.oldPrice) * 100;
+
+    if (Math.abs(changeUsd) < minUsd || Math.abs(changePct) < minPct) continue;
+
+    const product = await productRepo.findById(c.productId);
+    if (!product) continue;
+
     const mover: PriceMover = {
-      productId: m.product_id,
-      title: m.title,
-      platform: m.platform,
+      productId: c.productId,
+      title: product.title,
+      platform: product.platform ?? "",
       condition,
-      previousPrice: m.previous_price,
-      currentPrice: m.current_price,
-      changeUsd: m.change_usd,
-      changePct: m.change_pct,
+      previousPrice: c.oldPrice,
+      currentPrice: c.newPrice,
+      changeUsd,
+      changePct,
       previousDate,
       currentDate,
     };
-    if (m.change_pct > 0) risers.push(mover);
+
+    if (changePct > 0) risers.push(mover);
     else fallers.push(mover);
   }
 
@@ -149,45 +123,41 @@ export function detectTrends(
 /**
  * Platform-level trend summary: which consoles are heating up?
  */
-export function platformTrends(
-  sqliteDb: Database.Database,
+export async function platformTrends(
   condition = "loose",
-): Array<{ platform: string; avgChangePct: number; productCount: number }> {
-  const dates = sqliteDb
-    .prepare(
-      `SELECT DISTINCT recorded_at FROM price_points
-       WHERE condition = ? AND source = 'pricecharting'
-       ORDER BY recorded_at DESC LIMIT 2`,
-    )
-    .all(condition) as { recorded_at: string }[];
+): Promise<Array<{ platform: string; avgChangePct: number; productCount: number }>> {
+  const changes = await pricePointRepo.findPriceChanges({
+    condition,
+    minPriceUsd: 10,
+    limit: 100_000,
+  });
 
-  if (dates.length < 2) return [];
+  if (changes.length === 0) return [];
 
-  const rows = sqliteDb
-    .prepare(
-      `SELECT
-         p.platform,
-         AVG((pp_new.price_usd - pp_old.price_usd) / pp_old.price_usd * 100) as avg_change_pct,
-         COUNT(*) as product_count
-       FROM products p
-       JOIN price_points pp_new ON pp_new.product_id = p.id
-         AND pp_new.condition = ? AND pp_new.recorded_at = ?
-       JOIN price_points pp_old ON pp_old.product_id = p.id
-         AND pp_old.condition = ? AND pp_old.recorded_at = ?
-       WHERE pp_old.price_usd > 10
-       GROUP BY p.platform
-       HAVING product_count >= 10
-       ORDER BY avg_change_pct DESC`,
-    )
-    .all(condition, dates[0].recorded_at, condition, dates[1].recorded_at) as Array<{
-    platform: string;
-    avg_change_pct: number;
-    product_count: number;
-  }>;
+  // Group by platform
+  const platformMap = new Map<string, { totalPct: number; count: number }>();
 
-  return rows.map((r) => ({
-    platform: r.platform,
-    avgChangePct: r.avg_change_pct,
-    productCount: r.product_count,
-  }));
+  for (const c of changes) {
+    const product = await productRepo.findById(c.productId);
+    if (!product?.platform) continue;
+
+    const changePct = ((c.newPrice - c.oldPrice) / c.oldPrice) * 100;
+    const entry = platformMap.get(product.platform) ?? { totalPct: 0, count: 0 };
+    entry.totalPct += changePct;
+    entry.count += 1;
+    platformMap.set(product.platform, entry);
+  }
+
+  const results: Array<{ platform: string; avgChangePct: number; productCount: number }> = [];
+  for (const [platform, data] of platformMap) {
+    if (data.count < 10) continue;
+    results.push({
+      platform,
+      avgChangePct: data.totalPct / data.count,
+      productCount: data.count,
+    });
+  }
+
+  results.sort((a, b) => b.avgChangePct - a.avgChangePct);
+  return results;
 }

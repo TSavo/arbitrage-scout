@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { db } from "@/db/client";
-import { sqlite } from "@/db/client";
+import { sql } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -29,11 +29,9 @@ export default async function PlatformsPage() {
   // Read from cached platform_stats table
   let platforms: PlatformStat[] = [];
   try {
-    platforms = sqlite
-      .prepare(
-        `SELECT * FROM platform_stats WHERE product_count >= 30 ORDER BY avg_volume DESC`,
-      )
-      .all() as PlatformStat[];
+    platforms = db.all(sql`
+      SELECT * FROM platform_stats WHERE product_count >= 30 ORDER BY avg_volume DESC
+    `) as PlatformStat[];
   } catch {
     // Table might not exist yet
   }

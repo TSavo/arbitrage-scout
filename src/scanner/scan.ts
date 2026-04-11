@@ -9,42 +9,21 @@
  *   5. Create Opportunity rows for deals
  */
 
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { resolve } from "path";
-import * as schema from "../db/schema";
-import { marketplaces } from "../db/schema";
 import { eq } from "drizzle-orm";
+import { db } from "@/db/client";
+import { marketplaces } from "@/db/schema";
 import type { IMarketplaceAdapter, RawListing } from "../sources/IMarketplaceAdapter";
 import { cfg, startScanLog, finishScanLog, buildLlm } from "./helpers";
 import { processListing } from "./processor";
+import { checkWatchlistAlerts } from "./watchlist";
 import { log, section, progress, skip, error } from "@/lib/logger";
 
 type Config = Record<string, unknown>;
 
 /**
- * Build the Drizzle db instance for the configured path.
- * Seeds marketplaces if they don't exist.
- */
-function openDb(dbPath: string) {
-  const sqlite = new Database(resolve(dbPath));
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-
-  // Initialize embedding cache table
-  const { initEmbeddingCache } = require("../db/embedding_cache");
-  initEmbeddingCache(sqlite);
-
-  const db = drizzle(sqlite, { schema });
-  return { db, sqlite };
-}
-
-/**
  * Seed default marketplaces if they don't exist.
  */
-function seedMarketplaces(
-  db: ReturnType<typeof drizzle<typeof schema>>,
-) {
+function seedMarketplaces() {
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
@@ -74,7 +53,6 @@ export async function runScan(
   config: Config,
   adapters: IMarketplaceAdapter[],
 ): Promise<number> {
-  const dbPath = cfg(config, "database", "path", "data/scout.db");
   const alertCfg = (config["alerts"] ?? {}) as Record<string, unknown>;
   const normCfg = (config["normalizer"] ?? {}) as Record<string, unknown>;
 
@@ -86,8 +64,7 @@ export async function runScan(
       ? alertCfg["min_margin_pct"]
       : 30) / 100;
 
-  const { db } = openDb(dbPath);
-  seedMarketplaces(db);
+  seedMarketplaces();
 
   const llm = buildLlm(normCfg);
 
@@ -159,10 +136,14 @@ export async function runScan(
 
     log("scan", `${adapter.marketplace_id} summary: ${queries.length} queries, ${allListings.length} listings, ${nOpps} opportunities${rateLimited ? " [RATE LIMITED]" : ""}`);
 
-    if ("close" in adapter && typeof (adapter as { close?: () => void }).close === "function") {
-      (adapter as { close: () => void }).close();
+    if ("close" in adapter && typeof (adapter as any).close === "function") {
+      await (adapter as any).close();
     }
   }
+
+  section("WATCHLIST ALERTS");
+  const alertCount = checkWatchlistAlerts();
+  log("scan", `watchlist: ${alertCount} new alert(s) triggered`);
 
   section("SCAN COMPLETE");
   log("scan", `total opportunities found: ${totalOpportunities}`);

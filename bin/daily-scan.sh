@@ -1,5 +1,5 @@
 #!/bin/bash
-# Daily arbitrage scout: stock → scan → trends → arbitrage → platforms
+# Daily arbitrage scout: stock → scan → verify → trends → arbitrage → platforms
 # Run via cron: 0 13 * * * ~/Projects/arbitrage-scout-ts/bin/daily-scan.sh
 # (6am Pacific = 13:00 UTC)
 
@@ -17,36 +17,40 @@ set +a
 export DB_PATH=data/scout-v2.db
 
 # 1. Download fresh PriceCharting CSVs
-echo "[1/6] Downloading CSVs..."
-curl -so /tmp/pc-videogames.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}"
-curl -so /tmp/pc-pokemon.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=pokemon-cards"
-curl -so /tmp/pc-magic.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=magic-cards"
-curl -so /tmp/pc-yugioh.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=yugioh-cards"
-curl -so /tmp/pc-onepiece.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=one-piece-cards"
-curl -so /tmp/pc-funko.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=funko-pops"
-curl -so /tmp/pc-lego.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=lego-sets"
-curl -so /tmp/pc-comics.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=comics"
-curl -so /tmp/pc-coins.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=coins"
+echo "[1/7] Downloading CSVs..."
+curl --max-time 120 -so /tmp/pc-videogames.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}"
+curl --max-time 120 -so /tmp/pc-pokemon.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=pokemon-cards"
+curl --max-time 120 -so /tmp/pc-magic.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=magic-cards"
+curl --max-time 120 -so /tmp/pc-yugioh.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=yugioh-cards"
+curl --max-time 120 -so /tmp/pc-onepiece.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=one-piece-cards"
+curl --max-time 120 -so /tmp/pc-funko.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=funko-pops"
+curl --max-time 120 -so /tmp/pc-lego.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=lego-sets"
+curl --max-time 120 -so /tmp/pc-comics.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=comics"
+curl --max-time 120 -so /tmp/pc-coins.csv "https://www.pricecharting.com/price-guide/download-custom?t=${PC_API_KEY}&category=coins"
 echo "CSVs downloaded"
 
-# 2. Stock catalog with fresh prices (new price_points for today)
-echo "[2/6] Stocking catalog..."
+# 2. Stock catalog with fresh prices + embed new products
+echo "[2/7] Stocking catalog..."
 npx tsx src/cli.ts stock
 
-# 3. Scan all marketplaces
-echo "[3/6] Scanning marketplaces..."
+# 3. Scan all marketplaces (headless — no Cloudflare interaction)
+echo "[3/7] Scanning marketplaces..."
 npx tsx src/cli.ts scan
 
-# 4. Trend detection
-echo "[4/6] Detecting trends..."
+# 4. Verify opportunity URLs are still valid
+echo "[4/7] Verifying opportunities..."
+npx tsx src/cli.ts verify
+
+# 5. Trend detection
+echo "[5/7] Detecting trends..."
 npx tsx src/cli.ts trends
 
-# 5. Cross-marketplace arbitrage
-echo "[5/6] Finding arbitrage..."
+# 6. Cross-marketplace arbitrage
+echo "[6/7] Finding arbitrage..."
 npx tsx src/cli.ts arbitrage
 
-# 6. Platform analysis
-echo "[6/6] Analyzing platforms..."
+# 7. Platform analysis
+echo "[7/7] Analyzing platforms..."
 npx tsx src/cli.ts platforms
 
 echo "=== Done $(date) ==="

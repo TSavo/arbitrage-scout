@@ -12,6 +12,10 @@ import { ShopGoodwillAdapter } from "./shopgoodwill";
 import { PriceChartingAdapter } from "./pricecharting";
 import { DiscogsAdapter } from "./discogs";
 import { HiBidAdapter } from "./hibid";
+import { TcgPlayerMarketAdapter } from "./tcgplayer_market";
+import { MercariAdapter } from "./mercari";
+import { LiveAuctioneersAdapter } from "./liveauctioneers";
+import { WhatnotAdapter } from "./whatnot";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -38,6 +42,14 @@ export interface AdapterConfig {
   discogs?: { enabled?: boolean };
   /** HiBid needs no credentials — uses Playwright for Cloudflare bypass */
   hibid?: { enabled?: boolean };
+  /** TCGPlayer marketplace search — no credentials needed */
+  tcgplayer_market?: { enabled?: boolean };
+  /** Mercari — no credentials needed, uses Playwright for API interception */
+  mercari?: { enabled?: boolean };
+  /** LiveAuctioneers — no credentials needed, public search API */
+  liveauctioneers?: { enabled?: boolean };
+  /** Whatnot — no credentials needed, uses Playwright for GraphQL interception */
+  whatnot?: { enabled?: boolean };
 }
 
 /**
@@ -101,6 +113,42 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "built HiBidAdapter (Playwright + GraphQL)");
   } else {
     log("registry", "HiBidAdapter skipped (disabled in config)");
+  }
+
+  // TCGPlayer marketplace search — no credentials needed
+  const tcgMarketCfg = cfg.tcgplayer_market ?? {};
+  if (tcgMarketCfg.enabled !== false) {
+    adapters.push(new TcgPlayerMarketAdapter());
+    log("registry", "built TcgPlayerMarketAdapter (no-auth; public search API)");
+  } else {
+    log("registry", "TcgPlayerMarketAdapter skipped (disabled in config)");
+  }
+
+  // Mercari — no credentials needed, uses Playwright for API interception
+  const mercariCfg = cfg.mercari ?? {};
+  if (mercariCfg.enabled !== false) {
+    adapters.push(new MercariAdapter());
+    log("registry", "built MercariAdapter (Playwright + API interception)");
+  } else {
+    log("registry", "MercariAdapter skipped (disabled in config)");
+  }
+
+  // LiveAuctioneers — no credentials needed, public search API
+  const laCfg = cfg.liveauctioneers ?? {};
+  if (laCfg.enabled !== false) {
+    adapters.push(new LiveAuctioneersAdapter());
+    log("registry", "built LiveAuctioneersAdapter (no-auth; public search API)");
+  } else {
+    log("registry", "LiveAuctioneersAdapter skipped (disabled in config)");
+  }
+
+  // Whatnot — no credentials needed, uses Playwright for GraphQL interception
+  const whatnotCfg = cfg.whatnot ?? {};
+  if (whatnotCfg.enabled !== false) {
+    adapters.push(new WhatnotAdapter());
+    log("registry", "built WhatnotAdapter (Playwright + GraphQL)");
+  } else {
+    log("registry", "WhatnotAdapter skipped (disabled in config)");
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);

@@ -15,15 +15,11 @@
  *   (others skipped)
  */
 
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { eq, and } from "drizzle-orm";
-import * as schema from "../db/schema";
-import { products, productIdentifiers, pricePoints } from "../db/schema";
+import { db } from "@/db/client";
+import { products, productIdentifiers, pricePoints } from "@/db/schema";
 import { TcgCsvSource, CATEGORIES } from "./tcgcsv";
 import { log, error, section, progress } from "@/lib/logger";
-
-type Db = ReturnType<typeof drizzle<typeof schema>>;
 
 // ── Condition mapping ─────────────────────────────────────────────────
 
@@ -49,13 +45,9 @@ function normalizeName(name: string): string {
 /**
  * Load TCGplayer prices from TCGCSV into price_points.
  *
- * @param sqlite  Raw better-sqlite3 instance (for bulk prepared statements)
- * @param db      Drizzle DB instance (for identifier lookups)
  * @param categories  Category IDs to load. Defaults to Pokemon, MTG, YuGiOh, One Piece.
  */
 export async function loadTcgPlayerPrices(
-  sqlite: Database.Database,
-  db: Db,
   categories: number[] = [
     CATEGORIES.pokemon,   // 3
     CATEGORIES.mtg,       // 1
@@ -70,15 +62,6 @@ export async function loadTcgPlayerPrices(
   // Build name → productId lookup map from our products table for fuzzy match fallback.
   // Built lazily per category to keep memory manageable.
   log("tcgplayer", `loadTcgPlayerPrices: categories=[${categories.join(",")}]`);
-
-  const insertPrice = sqlite.prepare(`
-    INSERT OR IGNORE INTO price_points (product_id, source, condition, price_usd, recorded_at)
-    VALUES (@product_id, @source, @condition, @price_usd, @recorded_at)
-  `);
-
-  const flushPrices = sqlite.transaction((batch: Record<string, unknown>[]) => {
-    for (const row of batch) insertPrice.run(row);
-  });
 
   for (const categoryId of categories) {
     section(`TCGPLAYER: category ${categoryId}`);
@@ -95,12 +78,12 @@ export async function loadTcgPlayerPrices(
     log("tcgplayer", `categoryId=${categoryId}: ${groups.length} group(s) to process`);
 
     // Build a product name map for this category to support name-based fallback matching.
-    // We key on normalized title → productId. Only load products of types relevant to this category.
     const nameToProductId = new Map<string, string>();
     try {
-      const allProducts = sqlite
-        .prepare("SELECT id, title FROM products")
-        .all() as { id: string; title: string }[];
+      const allProducts = db
+        .select({ id: products.id, title: products.title })
+        .from(products)
+        .all();
       for (const p of allProducts) {
         nameToProductId.set(normalizeName(p.title), p.id);
       }
@@ -127,7 +110,7 @@ export async function loadTcgPlayerPrices(
 
       if (!rows.length) continue;
 
-      const batch: Record<string, unknown>[] = [];
+      const batch: (typeof pricePoints.$inferInsert)[] = [];
 
       for (const row of rows) {
         const condition = SUBTYPE_CONDITION_MAP[row.subTypeName];
@@ -179,16 +162,20 @@ export async function loadTcgPlayerPrices(
         }
 
         batch.push({
-          product_id: productId,
+          productId,
           source: "tcgplayer",
           condition,
-          price_usd: price,
-          recorded_at: today,
+          priceUsd: price,
+          recordedAt: today,
         });
       }
 
       if (batch.length) {
-        flushPrices(batch);
+        db.transaction((tx) => {
+          for (const row of batch) {
+            tx.insert(pricePoints).values(row).onConflictDoNothing().run();
+          }
+        });
         totalInserted += batch.length;
         log(
           "tcgplayer",

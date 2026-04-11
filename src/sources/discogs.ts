@@ -12,7 +12,7 @@
  * Rate limit: 25 req/min unauthenticated → 2.5s between calls
  */
 
-import { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
+import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
 import { log, error } from "@/lib/logger";
 
 const DISCOGS_BASE = "https://api.discogs.com";
@@ -78,12 +78,15 @@ async function _get(path: string): Promise<Record<string, unknown>> {
   await _rateLimit();
   const url = `${DISCOGS_BASE}${path}`;
   const t0 = Date.now();
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "application/vnd.discogs.v2.discogs+json",
-    },
-  });
+  const token = process.env.DISCOGS_TOKEN;
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    Accept: "application/vnd.discogs.v2.discogs+json",
+  };
+  if (token) {
+    headers["Authorization"] = `Discogs token=${token}`;
+  }
+  const res = await fetch(url, { headers });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} from ${url}`);
   }
@@ -231,18 +234,64 @@ export class DiscogsAdapter implements IMarketplaceAdapter {
   }
 
   /**
-   * Discogs marketplace search requires OAuth — not available unauthenticated.
-   * Returns empty; this adapter is for pricing (via DiscogsSource), not buying.
+   * Search the Discogs marketplace for listings.
+   * Requires DISCOGS_TOKEN in env for authenticated access.
    */
   async search(
-    _query: string,
-    _options?: { max_price?: number; limit?: number },
+    query: string,
+    options?: { max_price?: number; limit?: number },
   ): Promise<RawListing[]> {
-    log(
-      "discogs",
-      "search() not available (Discogs marketplace requires auth); use DiscogsSource for pricing",
-    );
-    return [];
+    if (!process.env.DISCOGS_TOKEN) {
+      log("discogs", "search() skipped — no DISCOGS_TOKEN in env");
+      return [];
+    }
+
+    const limit = options?.limit ?? 40;
+    log("discogs", `marketplace search: "${query}" limit=${limit}`);
+
+    try {
+      // Search database for releases, then fetch pricing for each
+      const source = new DiscogsSource();
+      const releases = await source.searchReleases(query, limit);
+
+      const listings: RawListing[] = [];
+      for (const release of releases) {
+        // Search endpoint doesn't include pricing — fetch each release
+        const detail = await source.getRelease(release.id);
+        if (!detail) continue;
+        const price = detail.lowest_price;
+        if (!price || price <= 0 || detail.num_for_sale === 0) continue;
+        if (options?.max_price && price > options.max_price) continue;
+
+        listings.push(makeRawListing({
+          marketplace_id: "discogs",
+          listing_id: `release-${detail.id}`,
+          title: detail.artists?.length ? `${detail.artists.join(", ")} - ${detail.title}` : detail.title,
+          price_usd: price,
+          url: `https://www.discogs.com/sell/release/${detail.id}`,
+          description: `${detail.genres.join(", ")} | ${detail.formats?.join(", ") ?? ""} | ${detail.num_for_sale} for sale | ${detail.have} have / ${detail.want} want`,
+          image_url: detail.thumb ?? undefined,
+          category_raw: detail.genres[0] ?? undefined,
+          extra: {
+            discogs_id: detail.id,
+            year: detail.year,
+            artists: detail.artists,
+            labels: detail.labels,
+            formats: detail.formats,
+            genres: detail.genres,
+            num_for_sale: detail.num_for_sale,
+            have: detail.have,
+            want: detail.want,
+          },
+        }));
+      }
+
+      log("discogs", `marketplace search "${query}" → ${listings.length} listings with prices`);
+      return listings;
+    } catch (err) {
+      error("discogs", `marketplace search failed: ${err}`);
+      return [];
+    }
   }
 
   isAvailable(): boolean {

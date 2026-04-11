@@ -9,7 +9,6 @@ import {
   marketplaces,
 } from "@/db/schema";
 import { desc, eq, count, sql } from "drizzle-orm";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 
@@ -36,20 +35,8 @@ function timeAgo(ts: string | null | undefined) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "new") return "default";
-  if (status === "reviewed") return "secondary";
-  if (status === "purchased") return "outline";
-  return "secondary";
-}
-
 export default async function DashboardPage() {
-  const [
-    statusCounts,
-    productCount,
-    lastScan,
-    recentOpps,
-  ] = await Promise.all([
+  const [statusCounts, productCount, lastScan, recentOpps] = await Promise.all([
     db
       .select({ status: opportunities.status, count: count() })
       .from(opportunities)
@@ -83,11 +70,11 @@ export default async function DashboardPage() {
       .innerJoin(listings, eq(opportunities.listingId, listings.id))
       .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
       .orderBy(desc(opportunities.foundAt))
-      .limit(5),
+      .limit(8),
   ]);
 
   const byStatus = Object.fromEntries(
-    statusCounts.map((r) => [r.status, r.count])
+    statusCounts.map((r) => [r.status, r.count]),
   );
   const totalOpps = statusCounts.reduce((s, r) => s + r.count, 0);
   const scan = lastScan[0];
@@ -96,78 +83,96 @@ export default async function DashboardPage() {
     <div className="p-6 space-y-6">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Dashboard</h2>
-        <p className="text-muted-foreground text-sm mt-0.5">
+        <p className="text-sm mt-0.5" style={{ color: "#9295a0" }}>
           Collectibles arbitrage overview
         </p>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards — each with its own color identity */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Total Opportunities
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{totalOpps}</div>
-            <div className="flex gap-2 mt-2 flex-wrap">
-              <Badge variant="default" className="text-xs">
-                {byStatus["new"] ?? 0} new
-              </Badge>
-              <Badge variant="secondary" className="text-xs">
-                {byStatus["reviewed"] ?? 0} reviewed
-              </Badge>
-              <Badge variant="outline" className="text-xs">
-                {byStatus["purchased"] ?? 0} purchased
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Opportunities — emerald */}
+        <div
+          className="rounded-lg p-4 border"
+          style={{
+            background: "linear-gradient(135deg, #0a1f15, #0f2b1c)",
+            borderColor: "#1a3d2a",
+          }}
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: "#4ade80" }}>
+            Opportunities
+          </p>
+          <p className="text-3xl font-bold mt-1" style={{ color: "#34d399" }}>
+            {totalOpps}
+          </p>
+          <div className="flex gap-2 mt-3 flex-wrap">
+            <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "#34d39920", color: "#34d399" }}>
+              {byStatus["new"] ?? 0} new
+            </span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "#38bdf820", color: "#38bdf8" }}>
+              {byStatus["reviewed"] ?? 0} reviewed
+            </span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "#fbbf2420", color: "#fbbf24" }}>
+              {byStatus["purchased"] ?? 0} bought
+            </span>
+          </div>
+        </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Products in Catalog
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">{productCount[0]?.count ?? 0}</div>
-            <p className="text-xs text-muted-foreground mt-2">Tracked items</p>
-          </CardContent>
-        </Card>
+        {/* Products — blue */}
+        <div
+          className="rounded-lg p-4 border"
+          style={{
+            background: "linear-gradient(135deg, #0a1525, #0f1c30)",
+            borderColor: "#1a2d4a",
+          }}
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: "#60a5fa" }}>
+            Products in Catalog
+          </p>
+          <p className="text-3xl font-bold mt-1" style={{ color: "#38bdf8" }}>
+            {(productCount[0]?.count ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[11px] mt-3" style={{ color: "#5b7a9a" }}>
+            Tracked across all categories
+          </p>
+        </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Last Scan
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">
-              {scan ? timeAgo(scan.startedAt) : "—"}
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              {scan?.marketplaceId ?? "No scans yet"}
-            </p>
-          </CardContent>
-        </Card>
+        {/* Last Scan — same navy family */}
+        <div
+          className="rounded-lg p-4 border"
+          style={{
+            background: "linear-gradient(135deg, #101828, #152035)",
+            borderColor: "#1e2d4a",
+          }}
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: "#6880a8" }}>
+            Last Scan
+          </p>
+          <p className="text-3xl font-bold mt-1" style={{ color: "#e8ecf4" }} suppressHydrationWarning>
+            {scan ? timeAgo(scan.startedAt) : "—"}
+          </p>
+          <p className="text-[11px] mt-3" style={{ color: "#4a6080" }}>
+            {scan?.marketplaceId ?? "No scans yet"}
+          </p>
+        </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Last Scan Results
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">
-              {scan?.opportunitiesFound ?? "—"}
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              {scan ? `${scan.listingsFound} listings scanned` : "No data"}
-            </p>
-          </CardContent>
-        </Card>
+        {/* Last Results */}
+        <div
+          className="rounded-lg p-4 border"
+          style={{
+            background: "linear-gradient(135deg, #101828, #152035)",
+            borderColor: "#1e2d4a",
+          }}
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: "#6880a8" }}>
+            Last Scan Results
+          </p>
+          <p className="text-3xl font-bold mt-1" style={{ color: "#e8ecf4" }}>
+            {scan?.opportunitiesFound ?? "—"}
+          </p>
+          <p className="text-[11px] mt-3" style={{ color: "#4a6080" }}>
+            {scan ? `${scan.listingsFound} listings scanned` : "No data"}
+          </p>
+        </div>
       </div>
 
       {/* Recent opportunities */}
@@ -176,60 +181,93 @@ export default async function DashboardPage() {
           <h3 className="font-semibold">Recent Opportunities</h3>
           <Link
             href="/opportunities"
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="text-xs hover:text-foreground transition-colors"
+            style={{ color: "#34d399" }}
           >
             View all →
           </Link>
         </div>
 
         {recentOpps.length === 0 ? (
-          <Card>
-            <CardContent className="py-10 text-center text-muted-foreground text-sm">
-              No opportunities found yet. Run a scan to get started.
-            </CardContent>
-          </Card>
+          <div
+            className="rounded-lg border p-10 text-center text-sm"
+            style={{ background: "#131c2e", borderColor: "#1e2d4a", color: "#8892aa" }}
+          >
+            No opportunities found yet. Run a scan to get started.
+          </div>
         ) : (
-          <div className="space-y-2">
-            {recentOpps.map((opp) => (
-              <Card key={opp.id} className="hover:bg-accent/30 transition-colors">
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">
-                        {opp.listingTitle}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <Badge variant="outline" className="text-xs">
-                          {opp.marketplaceName}
-                        </Badge>
-                        <Badge variant={statusVariant(opp.status)} className="text-xs">
-                          {opp.status}
-                        </Badge>
-                        {(opp.flags as string[]).map((flag) => (
-                          <Badge key={flag} variant="secondary" className="text-xs">
-                            {flag}
-                          </Badge>
-                        ))}
-                        <span className="text-xs text-muted-foreground">
-                          {timeAgo(opp.foundAt)}
+          <div className="space-y-1.5">
+            {recentOpps.map((opp) => {
+              const margin = opp.marginPct * 100;
+              // Color the left border by profit margin
+              const borderColor =
+                margin > 500 ? "#c084fc" : // purple = insane deal
+                margin > 100 ? "#34d399" : // green = great
+                margin > 50 ? "#38bdf8" :  // blue = good
+                "#fbbf24";                  // amber = okay
+
+              return (
+                <Link
+                  key={opp.id}
+                  href="/opportunities"
+                  className="rounded-lg border py-3 px-4 flex items-start justify-between gap-4 transition-colors hover:border-opacity-60 block"
+                  style={{
+                    background: "#131c2e",
+                    borderColor: "#1e2d4a",
+                    borderLeftWidth: 3,
+                    borderLeftColor: borderColor,
+                    textDecoration: "none",
+                  }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm truncate" style={{ color: "#e8e8ed" }}>
+                      {opp.listingTitle}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{ background: "#38bdf815", color: "#38bdf8" }}
+                      >
+                        {opp.marketplaceName}
+                      </span>
+                      <Badge variant="default" className="text-[10px]">
+                        {opp.status}
+                      </Badge>
+                      {(opp.flags as string[]).map((flag) => (
+                        <span
+                          key={flag}
+                          className="text-[10px] px-1.5 py-0.5 rounded"
+                          style={{ background: "#fbbf2415", color: "#fbbf24" }}
+                        >
+                          {flag}
                         </span>
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-sm font-mono text-green-400 font-semibold">
-                        {fmt(opp.profitUsd)}
-                      </p>
-                      <p className="text-xs text-muted-foreground font-mono">
-                        {fmtPct(opp.marginPct)} margin
-                      </p>
-                      <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                        {fmt(opp.listingPriceUsd)} → {fmt(opp.marketPriceUsd)}
-                      </p>
+                      ))}
+                      <span className="text-[10px]" style={{ color: "#6b6b76" }} suppressHydrationWarning>
+                        {timeAgo(opp.foundAt)}
+                      </span>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
+                  <div className="text-right shrink-0">
+                    <p
+                      className="text-sm font-semibold"
+                      style={{
+                        color: "#34d399",
+                        fontFamily: "var(--font-mono)",
+                        textShadow: "0 0 12px #34d39930",
+                      }}
+                    >
+                      {fmt(opp.profitUsd)}
+                    </p>
+                    <p className="text-[11px]" style={{ color: "#34d39980", fontFamily: "var(--font-mono)" }}>
+                      {fmtPct(opp.marginPct)} margin
+                    </p>
+                    <p className="text-[11px] mt-0.5" style={{ color: "#6b6b76", fontFamily: "var(--font-mono)" }}>
+                      {fmt(opp.listingPriceUsd)} → {fmt(opp.marketPriceUsd)}
+                    </p>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         )}
       </div>

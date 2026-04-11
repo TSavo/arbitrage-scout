@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../client";
-import { pricePoints } from "../schema";
+import { pricePoints, products } from "../schema";
 import type { IRepository } from "./IRepository";
 
 export type PricePoint = typeof pricePoints.$inferSelect;
@@ -91,6 +91,168 @@ export class PricePointRepo implements IRepository<PricePoint, number> {
       where: and(...conditions),
       orderBy: (pp, { asc }) => [asc(pp.recordedAt)],
     });
+  }
+  /**
+   * Get price changes between the two most recent distinct recordedAt dates.
+   * Used by trend detection to surface products with significant movement.
+   */
+  async findPriceChanges(opts: {
+    condition: string;
+    minPriceUsd: number;
+    limit: number;
+  }): Promise<
+    Array<{
+      productId: string;
+      oldPrice: number;
+      newPrice: number;
+      oldDate: string;
+      newDate: string;
+    }>
+  > {
+    // Find the two most recent distinct dates
+    const dates = await db
+      .selectDistinct({ recordedAt: pricePoints.recordedAt })
+      .from(pricePoints)
+      .where(
+        and(
+          eq(pricePoints.condition, opts.condition),
+          eq(pricePoints.source, "pricecharting"),
+        ),
+      )
+      .orderBy(desc(pricePoints.recordedAt))
+      .limit(2);
+
+    if (dates.length < 2) return [];
+
+    const newDate = dates[0].recordedAt;
+    const oldDate = dates[1].recordedAt;
+
+    // Join price_points to itself on the two dates
+    const ppNew = db
+      .select({
+        productId: pricePoints.productId,
+        priceUsd: pricePoints.priceUsd,
+      })
+      .from(pricePoints)
+      .where(
+        and(
+          eq(pricePoints.condition, opts.condition),
+          eq(pricePoints.recordedAt, newDate),
+        ),
+      )
+      .as("pp_new");
+
+    const ppOld = db
+      .select({
+        productId: pricePoints.productId,
+        priceUsd: pricePoints.priceUsd,
+      })
+      .from(pricePoints)
+      .where(
+        and(
+          eq(pricePoints.condition, opts.condition),
+          eq(pricePoints.recordedAt, oldDate),
+        ),
+      )
+      .as("pp_old");
+
+    const rows = await db
+      .select({
+        productId: ppNew.productId,
+        oldPrice: ppOld.priceUsd,
+        newPrice: ppNew.priceUsd,
+      })
+      .from(ppNew)
+      .innerJoin(ppOld, eq(ppNew.productId, ppOld.productId))
+      .where(gte(ppOld.priceUsd, opts.minPriceUsd))
+      .limit(opts.limit);
+
+    return rows.map((r) => ({
+      productId: r.productId,
+      oldPrice: r.oldPrice,
+      newPrice: r.newPrice,
+      oldDate,
+      newDate,
+    }));
+  }
+
+  /**
+   * Get all latest prices (most recent per product+source+condition).
+   * Used by arbitrage to compare prices across sources.
+   */
+  async findLatestPricesBySource(opts?: {
+    condition?: string;
+    productTypeId?: string;
+  }): Promise<
+    Array<{
+      productId: string;
+      source: string;
+      condition: string;
+      priceUsd: number;
+      recordedAt: string;
+    }>
+  > {
+    // Subquery: max recordedAt per product+source+condition
+    const maxDates = db
+      .select({
+        productId: pricePoints.productId,
+        source: pricePoints.source,
+        condition: pricePoints.condition,
+        maxDate: sql<string>`max(${pricePoints.recordedAt})`.as("max_date"),
+      })
+      .from(pricePoints)
+      .groupBy(pricePoints.productId, pricePoints.source, pricePoints.condition)
+      .as("max_dates");
+
+    const conditions = [
+      eq(pricePoints.productId, maxDates.productId),
+      eq(pricePoints.source, maxDates.source),
+      eq(pricePoints.condition, maxDates.condition),
+      eq(pricePoints.recordedAt, maxDates.maxDate),
+    ];
+
+    if (opts?.condition) {
+      conditions.push(eq(pricePoints.condition, opts.condition));
+    }
+
+    let query = db
+      .select({
+        productId: pricePoints.productId,
+        source: pricePoints.source,
+        condition: pricePoints.condition,
+        priceUsd: pricePoints.priceUsd,
+        recordedAt: pricePoints.recordedAt,
+      })
+      .from(pricePoints)
+      .innerJoin(maxDates, and(...conditions));
+
+    if (opts?.productTypeId) {
+      // Filter by product type via join to products
+      return db
+        .select({
+          productId: pricePoints.productId,
+          source: pricePoints.source,
+          condition: pricePoints.condition,
+          priceUsd: pricePoints.priceUsd,
+          recordedAt: pricePoints.recordedAt,
+        })
+        .from(pricePoints)
+        .innerJoin(maxDates, and(
+          eq(pricePoints.productId, maxDates.productId),
+          eq(pricePoints.source, maxDates.source),
+          eq(pricePoints.condition, maxDates.condition),
+          eq(pricePoints.recordedAt, maxDates.maxDate),
+        ))
+        .innerJoin(products, eq(pricePoints.productId, products.id))
+        .where(
+          and(
+            eq(products.productTypeId, opts.productTypeId),
+            ...(opts?.condition ? [eq(pricePoints.condition, opts.condition)] : []),
+          ),
+        );
+    }
+
+    return query;
   }
 }
 

@@ -110,7 +110,8 @@ export class HiBidAdapter implements IMarketplaceAdapter {
     log("hibid", "initializing Playwright session for Cloudflare bypass");
     try {
       const { chromium } = require("playwright");
-      const browser = await chromium.launch({ headless: true });
+      const headed = process.env.HEADED === "1";
+      const browser = await chromium.launch({ headless: !headed });
       const context = await browser.newContext();
       const page = await context.newPage();
 
@@ -222,24 +223,47 @@ export class HiBidAdapter implements IMarketplaceAdapter {
     const { totalCount, results } = data.lotSearch.pagedResults;
     log("hibid", `search "${query}": ${results.length} lots (${totalCount} total)`);
 
-    let listings = results.map((lot): RawListing => {
+    // Filter out closed lots and garbled titles before processing
+    const activeLots = results.filter((lot) => {
+      const lotState = lot.lotState || {};
+      const title = (lot.lead || "").trim();
+      // Skip closed auctions — their lot IDs get recycled
+      if (lotState.isClosed) return false;
+      // Skip garbled/empty titles
+      if (!title || title.length < 3 || title.startsWith(".")) return false;
+      return true;
+    });
+
+    if (activeLots.length < results.length) {
+      log("hibid", `filtered ${results.length - activeLots.length} closed/invalid lots (${activeLots.length} remain)`);
+    }
+
+    let listings = activeLots.map((lot): RawListing => {
       const lotState = lot.lotState || {};
       const auction = lot.auction || {};
       const pic = lot.featuredPicture || {};
+      const site = lot.site || {};
+
+      const itemId = lot.itemId || lot.id;
+      const auctionId = auction.id;
+      const url = `https://hibid.com/lot/${itemId}`;
+
       return makeRawListing({
         marketplace_id: "hibid",
-        listing_id: String(lot.itemId || lot.id),
+        listing_id: String(itemId),
         title: lot.lead || "",
         price_usd: lotState.highBid || lotState.minBid || 0,
-        url: `https://hibid.com/lot/${lot.itemId || lot.id}`,
+        url,
         description: lot.description ?? undefined,
         image_url: pic.thumbnailLocation ?? undefined,
         num_bids: lotState.bidCount || 0,
         end_time: lotState.timeLeft ?? undefined,
         extra: {
+          auction_id: auctionId,
           auction_name: auction.eventName,
           auction_city: auction.eventCity,
           auction_state: auction.eventState,
+          site_domain: site.domain,
           buy_now: lotState.buyNow,
           quantity: lot.quantity,
           shipping_offered: lot.shippingOffered,

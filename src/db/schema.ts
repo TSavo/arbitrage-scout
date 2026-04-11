@@ -171,6 +171,7 @@ export const listingItems = sqliteTable(
   (table) => [
     index("ix_listing_items_listing").on(table.listingId),
     index("ix_listing_items_product").on(table.productId),
+    uniqueIndex("uq_listing_items").on(table.listingId, table.productId),
   ],
 );
 
@@ -202,9 +203,54 @@ export const opportunities = sqliteTable(
     foundAt: text("found_at").notNull(),
     reviewedAt: text("reviewed_at"),
     notes: text("notes"),
+    buyPriceUsd: real("buy_price_usd"),
+    salePriceUsd: real("sale_price_usd"),
+    saleDate: text("sale_date"),
+    actualFeesUsd: real("actual_fees_usd"),
+    potentialProfitUsd: real("potential_profit_usd"),
+    potentialMarginPct: real("potential_margin_pct"),
   },
   (table) => [
     index("ix_opportunities_status").on(table.status, table.foundAt),
+    uniqueIndex("uq_opportunities_listing_product").on(table.listingId, table.productId),
+  ],
+);
+
+// ── Watchlist Items ─────────────────────────────────────────────────
+
+export const watchlistItems = sqliteTable(
+  "watchlist_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    targetPricePct: real("target_price_pct").notNull(), // e.g. 20 = alert when 20% below market
+    condition: text("condition").notNull().default("loose"),
+    createdAt: text("created_at").notNull(),
+    triggeredAt: text("triggered_at"),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    notes: text("notes"),
+  },
+  (table) => [
+    index("ix_watchlist_active").on(table.active, table.productId),
+  ],
+);
+
+// ── Embeddings (polymorphic) ─────────────────────────────────────────
+
+export const embeddings = sqliteTable(
+  "embeddings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    entityType: text("entity_type").notNull(), // "product" | "listing" | etc
+    entityId: text("entity_id").notNull(),
+    embeddedAt: text("embedded_at").notNull(),
+    // Vector data lives in sqlite-vec virtual table (vec_embeddings), not here.
+  },
+  (table) => [
+    uniqueIndex("uq_embeddings_entity").on(table.entityType, table.entityId),
+    index("ix_embeddings_type").on(table.entityType),
   ],
 );
 

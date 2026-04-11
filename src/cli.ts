@@ -6,11 +6,13 @@
  *   npx tsx src/cli.ts scan
  */
 
-import { section, log } from "./lib/logger";
+import { section, log, progress } from "./lib/logger";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
 // Load .env.local
+// NOTE: __dirname works here because we run via tsx, which supports CJS globals.
+// If migrating to native ESM, use import.meta.dirname instead.
 try {
   const envPath = resolve(__dirname, "../.env.local");
   const envContent = readFileSync(envPath, "utf8");
@@ -69,11 +71,8 @@ async function main() {
     log("cli", `found ${n} opportunities`);
   } else if (command === "trends") {
     section("TRENDS — Price movement analysis");
-    const Database = require("better-sqlite3");
-    const dbPath = process.env.DB_PATH || "data/scout-v2.db";
-    const sqlite = new Database(dbPath);
     const { detectTrends, platformTrends } = require("./scanner/trends");
-    const { risers, fallers } = detectTrends(sqlite, {
+    const { risers, fallers } = await detectTrends({
       minChangePct: 10,
       minChangeUsd: 5,
       condition: "loose",
@@ -81,72 +80,50 @@ async function main() {
     });
     log("cli", `${risers.length} risers, ${fallers.length} fallers`);
 
-    const platforms = platformTrends(sqlite);
+    const platforms = await platformTrends();
     if (platforms.length) {
       section("PLATFORM TRENDS");
       for (const p of platforms.slice(0, 15)) {
-        const arrow = p.avgChangePct > 0 ? "↑" : "↓";
+        const arrow = p.avgChangePct > 0 ? "\u2191" : "\u2193";
         log("cli", `  ${arrow} ${p.avgChangePct.toFixed(1)}%  ${p.platform} (${p.productCount} products)`);
       }
     }
-    sqlite.close();
   } else if (command === "arbitrage") {
     section("ARBITRAGE — Cross-marketplace deals");
-    const Database = require("better-sqlite3");
-    const dbPath = process.env.DB_PATH || "data/scout-v2.db";
-    const sqlite = new Database(dbPath);
     const { findCrossMarketplaceDeals } = require("./scanner/arbitrage");
-    const deals = findCrossMarketplaceDeals(sqlite, {
+    const deals = await findCrossMarketplaceDeals({
       minProfit: 15,
       minMargin: 0.2,
     });
     log("cli", `${deals.length} cross-marketplace deals`);
-    sqlite.close();
   } else if (command === "platforms") {
     section("PLATFORMS — Refreshing platform stats");
-    const Database = require("better-sqlite3");
-    const dbPath = process.env.DB_PATH || "data/scout-v2.db";
-    const sqlite = new Database(dbPath);
+    const { productRepo } = require("./db/repos/ProductRepo");
 
-    // Refresh the cached platform_stats table (fast — one aggregate query)
-    log("cli", "refreshing platform_stats...");
+    log("cli", "computing platform stats...");
     const t0 = Date.now();
-    sqlite.exec("DROP TABLE IF EXISTS platform_stats");
-    sqlite.exec(`CREATE TABLE platform_stats (
-      platform TEXT PRIMARY KEY, product_type_id TEXT, product_count INTEGER,
-      avg_loose REAL, avg_cib REAL, cib_to_loose_ratio REAL,
-      total_volume INTEGER, avg_volume REAL,
-      pct_above_50 REAL, pct_above_100 REAL, computed_at TEXT
-    )`);
-    sqlite.exec(`
-      INSERT INTO platform_stats
-      SELECT p.platform, p.product_type_id,
-        COUNT(DISTINCT p.id), ROUND(AVG(pp.price_usd), 2), 0, 0,
-        SUM(p.sales_volume), ROUND(AVG(p.sales_volume), 1),
-        ROUND(SUM(CASE WHEN pp.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1),
-        ROUND(SUM(CASE WHEN pp.price_usd >= 100 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1),
-        datetime('now')
-      FROM products p
-      JOIN price_points pp ON pp.product_id = p.id AND pp.condition = 'loose' AND pp.price_usd > 0
-      GROUP BY p.platform, p.product_type_id
-      HAVING COUNT(DISTINCT p.id) >= 20
-    `);
-    const count = (sqlite.prepare("SELECT COUNT(*) as c FROM platform_stats").get() as {c: number}).c;
-    log("cli", `${count} platforms refreshed in ${Date.now() - t0}ms`);
+    const stats = await productRepo.getPlatformStats();
+    log("cli", `${stats.length} platforms computed in ${Date.now() - t0}ms`);
 
-    // Show top undervalued
-    const top = sqlite.prepare(`
-      SELECT * FROM platform_stats
-      WHERE product_type_id = 'retro_game' AND product_count >= 30
-      ORDER BY avg_volume DESC LIMIT 15
-    `).all() as any[];
+    // Show top retro platforms by activity
+    const top = stats
+      .filter((s: any) => s.productTypeId === "retro_game" && s.productCount >= 30)
+      .sort((a: any, b: any) => b.avgVolume - a.avgVolume)
+      .slice(0, 15);
     section("TOP RETRO PLATFORMS BY ACTIVITY");
     for (const p of top) {
-      log("cli", `  ${(p.platform || '?').padEnd(28)} games=${String(p.product_count).padStart(5)}  avg$${(p.avg_loose || 0).toFixed(0).padStart(5)}  vol=${Math.round(p.avg_volume || 0).toString().padStart(5)}  >$50=${(p.pct_above_50 || 0).toFixed(0)}%  >$100=${(p.pct_above_100 || 0).toFixed(0)}%`);
+      log("cli", `  ${(p.platform || '?').padEnd(28)} games=${String(p.productCount).padStart(5)}  avg$${(p.avgLoose || 0).toFixed(0).padStart(5)}  vol=${Math.round(p.avgVolume || 0).toString().padStart(5)}  >$50=${(p.pctAbove50 || 0).toFixed(0)}%  >$100=${(p.pctAbove100 || 0).toFixed(0)}%`);
     }
-    sqlite.close();
+  } else if (command === "embed") {
+    const { runEmbed } = require("./scanner/embed");
+    const result = await runEmbed();
+    log("cli", `embedded ${result.embedded} products in ${(result.elapsedMs / 1000 / 60).toFixed(1)}m`);
+  } else if (command === "verify") {
+    const { verifyOpportunityUrls } = require("./scanner/verify");
+    const result = await verifyOpportunityUrls();
+    log("cli", `verified: ${result.checked} | valid: ${result.valid} | stale: ${result.stale} | errors: ${result.errors}`);
   } else {
-    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms]");
+    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify]");
     process.exit(1);
   }
 }
