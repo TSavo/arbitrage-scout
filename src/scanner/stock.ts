@@ -22,6 +22,8 @@ import {
 } from "../db/schema";
 import { cfg } from "./helpers";
 import { log, section, progress } from "@/lib/logger";
+import { loadTcgPlayerPrices } from "../sources/tcgplayer";
+import { CATEGORIES } from "../sources/tcgcsv";
 
 type Config = Record<string, unknown>;
 
@@ -449,6 +451,30 @@ export async function runStock(config: Config): Promise<number> {
   if (total > 0) {
     section("FTS5 INDEX REBUILD");
     rebuildFtsIndex(sqlite);
+  }
+
+  // Load TCGplayer prices as a second pricing source alongside PriceCharting.
+  // Only runs when at least some products are in the catalog (from CSV or prior runs).
+  const tcgEnabled = cfg(config, "tcgplayer", "enabled", true);
+  if (tcgEnabled) {
+    section("TCGPLAYER PRICE LOAD");
+    const tcgCategories: number[] = cfg(config, "tcgplayer", "categories", [
+      CATEGORIES.pokemon,
+      CATEGORIES.mtg,
+      CATEGORIES.yugioh,
+      CATEGORIES.one_piece,
+    ]);
+    log("stock", `loading TCGplayer prices for categories=[${tcgCategories.join(",")}]`);
+    try {
+      const tcgTotal = await loadTcgPlayerPrices(sqlite, db, tcgCategories);
+      log("stock", `TCGplayer price load complete: ${tcgTotal} price point(s) inserted`);
+    } catch (err) {
+      // Non-fatal: CSV data is already loaded; log and continue.
+      const msg = err instanceof Error ? err.message : String(err);
+      log("stock", `TCGplayer price load failed (non-fatal): ${msg}`);
+    }
+  } else {
+    log("stock", "TCGplayer price load skipped (tcgplayer.enabled=false in config)");
   }
 
   section("STOCK COMPLETE");

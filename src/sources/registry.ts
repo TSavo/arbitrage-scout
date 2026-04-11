@@ -10,6 +10,7 @@ import { IMarketplaceAdapter } from "./IMarketplaceAdapter";
 import { EbayAdapter } from "./ebay";
 import { ShopGoodwillAdapter } from "./shopgoodwill";
 import { PriceChartingAdapter } from "./pricecharting";
+import { DiscogsAdapter } from "./discogs";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -32,6 +33,8 @@ export interface AdapterConfig {
   ebay?: Partial<EbayAdapterConfig>;
   shopgoodwill?: Partial<ShopGoodwillAdapterConfig>;
   pricecharting?: Partial<PriceChartingAdapterConfig>;
+  /** Discogs needs no credentials — always enabled */
+  discogs?: { enabled?: boolean };
 }
 
 /**
@@ -77,6 +80,15 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "built PriceChartingAdapter");
   } else {
     log("registry", "PriceChartingAdapter skipped (missing api_key)");
+  }
+
+  // Discogs requires no credentials — enabled by default unless explicitly disabled.
+  const discogsCfg = cfg.discogs ?? {};
+  if (discogsCfg.enabled !== false) {
+    adapters.push(new DiscogsAdapter());
+    log("registry", "built DiscogsAdapter (no-auth; search() returns empty, provides discovery queries)");
+  } else {
+    log("registry", "DiscogsAdapter skipped (disabled in config)");
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);
