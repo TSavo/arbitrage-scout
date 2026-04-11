@@ -11,6 +11,7 @@ import { EbayAdapter } from "./ebay";
 import { ShopGoodwillAdapter } from "./shopgoodwill";
 import { PriceChartingAdapter } from "./pricecharting";
 import { DiscogsAdapter } from "./discogs";
+import { HiBidAdapter } from "./hibid";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -35,6 +36,8 @@ export interface AdapterConfig {
   pricecharting?: Partial<PriceChartingAdapterConfig>;
   /** Discogs needs no credentials — always enabled */
   discogs?: { enabled?: boolean };
+  /** HiBid needs no credentials — uses Playwright for Cloudflare bypass */
+  hibid?: { enabled?: boolean };
 }
 
 /**
@@ -89,6 +92,15 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "built DiscogsAdapter (no-auth; search() returns empty, provides discovery queries)");
   } else {
     log("registry", "DiscogsAdapter skipped (disabled in config)");
+  }
+
+  // HiBid — no credentials needed, uses Playwright for Cloudflare bypass
+  const hibidCfg = cfg.hibid ?? {};
+  if (hibidCfg.enabled !== false) {
+    adapters.push(new HiBidAdapter());
+    log("registry", "built HiBidAdapter (Playwright + GraphQL)");
+  } else {
+    log("registry", "HiBidAdapter skipped (disabled in config)");
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);

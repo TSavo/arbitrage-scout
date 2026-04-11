@@ -49,6 +49,7 @@ function seedMarketplaces(
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
     { id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true },
+    { id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
   ];
   for (const mp of defaults) {
