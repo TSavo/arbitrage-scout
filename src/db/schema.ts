@@ -310,6 +310,41 @@ export const opportunities = sqliteTable(
   ],
 );
 
+// ── Inventory Items (bottles the user owns) ─────────────────────────
+
+export const inventoryItems = sqliteTable(
+  "inventory_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Canonical product row. Nullable when we have the source SKU but
+     *  haven't been able to resolve it to a product yet — backfilled
+     *  automatically when a marketplace scan links the sku to a product. */
+    productId: text("product_id").references(() => products.id),
+    /** Marketplace the bottle was purchased from. */
+    source: text("source").notNull(),
+    /** Source-specific stable identifier (e.g. klwines_sku) for post-hoc
+     *  linking if productId is null at insert time. */
+    sourceSku: text("source_sku"),
+    /** Source-specific order / receipt id. */
+    sourceOrderId: text("source_order_id"),
+    /** Raw title from the receipt — kept verbatim for debugging. */
+    title: text("title").notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    purchasePriceUsd: real("purchase_price_usd"),
+    purchaseDate: text("purchase_date"),
+    importedAt: text("imported_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_inventory_source_order_sku").on(
+      table.source,
+      table.sourceOrderId,
+      table.sourceSku,
+    ),
+    index("ix_inventory_product").on(table.productId),
+    index("ix_inventory_source_sku").on(table.source, table.sourceSku),
+  ],
+);
+
 // ── Watchlist Items ─────────────────────────────────────────────────
 
 export const watchlistItems = sqliteTable(

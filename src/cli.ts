@@ -122,6 +122,10 @@ async function main() {
     const { verifyOpportunityUrls } = require("./scanner/verify");
     const result = await verifyOpportunityUrls();
     log("cli", `verified: ${result.checked} | valid: ${result.valid} | stale: ${result.stale} | errors: ${result.errors}`);
+  } else if (command === "stock-cellar") {
+    const { stockCellar } = require("./scanner/stock_cellar");
+    const result = await stockCellar();
+    log("cli", `orders=${result.orders} items=${result.items} linked=${result.linked} watched=${result.watched}`);
   } else if (command === "seed-taxonomy") {
     section("SEED-TAXONOMY — Populating taxonomy_nodes");
     const { seedTaxonomy } = require("./db/seed_taxonomy");
@@ -145,7 +149,7 @@ async function main() {
     const n = await reprocessStaleProducts({ limit: 1000 });
     log("cli", `reprocessed ${n} products`);
   } else {
-    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify|seed-taxonomy|seed-from-pricecharting|reprocess]");
+    console.log("Usage: npx tsx src/cli.ts [stock|stock-cellar|scan|trends|arbitrage|platforms|embed|verify|seed-taxonomy|seed-from-pricecharting|reprocess]");
     process.exit(1);
   }
 }

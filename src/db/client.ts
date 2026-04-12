@@ -195,6 +195,25 @@ sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_http_cache_fp ON http_cache(fi
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_http_cache_url ON http_cache(url)`);
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_http_cache_expires ON http_cache(expires_at)`);
 
+// Inventory items — bottles the user owns. Idempotent.
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS inventory_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT REFERENCES products(id),
+    source TEXT NOT NULL,
+    source_sku TEXT,
+    source_order_id TEXT,
+    title TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    purchase_price_usd REAL,
+    purchase_date TEXT,
+    imported_at TEXT NOT NULL
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_source_order_sku ON inventory_items(source, source_order_id, source_sku)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_inventory_product ON inventory_items(product_id)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_inventory_source_sku ON inventory_items(source, source_sku)`);
+
 // Products: taxonomy link + extraction watermark (idempotent)
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN taxonomy_node_id INTEGER`); } catch {}
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN extracted_schema_version INTEGER`); } catch {}
