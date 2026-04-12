@@ -14,6 +14,7 @@
 import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const SEARCH_URL =
   "https://mp-search-api.tcgplayer.com/v1/search/request?q={QUERY}&isList=false";
@@ -136,16 +137,20 @@ export class TcgPlayerMarketAdapter implements IMarketplaceAdapter {
     await this.rateLimit();
 
     const t0 = Date.now();
-    let resp: Response;
+    let resp: Awaited<ReturnType<typeof cachedFetch>>;
     try {
-      resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": USER_AGENT,
+      resp = await cachedFetch(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      });
+        { ttlMs: 10 * 60 * 1000, cacheTag: "tcgplayer-search" },
+      );
     } catch (err) {
       error("tcgplayer-market", `fetch failed for "${query}"`, err);
       return [];
@@ -168,7 +173,7 @@ export class TcgPlayerMarketAdapter implements IMarketplaceAdapter {
     };
 
     try {
-      data = (await resp.json()) as typeof data;
+      data = resp.json<typeof data>();
     } catch (err) {
       error("tcgplayer-market", `JSON parse failed for "${query}"`, err);
       return [];

@@ -11,6 +11,7 @@
 
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const PRICECHARTING_API = "https://www.pricecharting.com/api";
 /** 1 req/sec limit; pad generously to avoid 403s */
@@ -59,9 +60,12 @@ class PriceChartingSource {
     const t0 = Date.now();
     try {
       const params = new URLSearchParams({ t: this._apiKey, q: query });
-      const res = await fetch(`${PRICECHARTING_API}/products?${params}`);
+      const res = await cachedFetch(`${PRICECHARTING_API}/products?${params}`, {}, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "pricecharting-search",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = res.json<Record<string, unknown>>();
       const products = (data.products as Record<string, unknown>[]) ?? [];
       log("pricecharting", `search "${query}" → ${products.length} results elapsed=${Date.now() - t0}ms`);
       return products;
@@ -170,10 +174,13 @@ export class PriceChartingAdapter implements IMarketplaceAdapter {
         sort: "lowest-price",
       });
 
-      const res = await fetch(`${PRICECHARTING_API}/offers?${params}`);
+      const res = await cachedFetch(`${PRICECHARTING_API}/offers?${params}`, {}, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "pricecharting-search",
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = res.json<Record<string, unknown>>();
       let offers = (data.offers as Record<string, unknown>[]) ?? [];
 
       if (max_price != null) {

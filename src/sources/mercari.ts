@@ -16,6 +16,7 @@
 import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const RATE_LIMIT_MS = 2500;
 const SESSION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
@@ -271,7 +272,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
 
     const t0 = Date.now();
     try {
-      const resp = await fetch(this.captured.url, {
+      const resp = await cachedFetch(this.captured.url, {
         method: this.captured.method,
         headers: {
           ...this.captured.headers,
@@ -279,6 +280,9 @@ export class MercariAdapter implements IMarketplaceAdapter {
           "User-Agent": this.userAgent,
         },
         body: JSON.stringify(body),
+      }, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "mercari-search",
       });
 
       if (!resp.ok) {
@@ -290,7 +294,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
         return [];
       }
 
-      const data = await resp.json();
+      const data = resp.json();
       log("mercari", `API search elapsed=${Date.now() - t0}ms`);
 
       return this.parseApiResponse(data, limit, options.max_price);

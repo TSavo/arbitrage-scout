@@ -9,6 +9,7 @@
  */
 
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const SCRYFALL_API = "https://api.scryfall.com";
 /** 100ms between requests per Scryfall guidelines */
@@ -54,15 +55,17 @@ export class ScryfallSource {
       ? `${SCRYFALL_API}${path}?${new URLSearchParams(params)}`
       : `${SCRYFALL_API}${path}`;
     const t0 = Date.now();
-    const res = await fetch(url, {
-      headers: { "User-Agent": "arbitrage-scout-ts/1.0" },
-    });
+    const res = await cachedFetch(
+      url,
+      { headers: { "User-Agent": "arbitrage-scout-ts/1.0" } },
+      { ttlMs: 12 * 60 * 60 * 1000, cacheTag: "scryfall-ref" },
+    );
     if (!res.ok) {
-      error("scryfall", `GET ${path} → ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
-      throw new Error(`Scryfall ${res.status}: ${res.statusText}`);
+      error("scryfall", `GET ${path} → ${res.status} (${Date.now() - t0}ms)`);
+      throw new Error(`Scryfall ${res.status}`);
     }
     log("scryfall", `GET ${path} elapsed=${Date.now() - t0}ms`);
-    return (await res.json()) as Record<string, unknown>;
+    return res.json<Record<string, unknown>>();
   }
 
   /** Search Scryfall for cards. Returns raw card objects with prices. */

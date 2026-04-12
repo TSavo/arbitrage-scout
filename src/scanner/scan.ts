@@ -12,13 +12,13 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { marketplaces } from "@/db/schema";
-import type { IMarketplaceAdapter, RawListing } from "../sources/IMarketplaceAdapter";
+import type { IMarketplaceAdapter } from "../sources/IMarketplaceAdapter";
+import { searchAsStream } from "../sources/IMarketplaceAdapter";
 import { startScanLog, finishScanLog, buildLlm } from "./helpers";
-import { CommandPipeline } from "@/pipeline/pipeline";
-import { toRawListing } from "@/pipeline/utils";
-import { getProductTypeSchema } from "@/pipeline/commands/extract";
+import { runPipeline } from "@/pipeline/stream/pipeline";
+import { merge } from "@/pipeline/stream/parallel";
 import { checkWatchlistAlerts } from "./watchlist";
-import { log, section, progress, skip, error } from "@/lib/logger";
+import { log, section, skip, error } from "@/lib/logger";
 
 type Config = Record<string, unknown>;
 
@@ -33,6 +33,7 @@ function seedMarketplaces() {
     { id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true },
     { id: "discogs", name: "Discogs", baseUrl: "https://www.discogs.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
+    { id: "klwines", name: "K&L Wines", baseUrl: "https://www.klwines.com", supportsApi: false },
   ];
   for (const mp of defaults) {
     const existing = db
@@ -69,88 +70,76 @@ export async function runScan(
   seedMarketplaces();
 
   const llm = buildLlm(normCfg);
-  const pipeline = new CommandPipeline({
-    minProfitUsd: minProfit,
-    minMarginPct: minMargin,
-    llmUrl: (normCfg["base_url"] as string) ?? process.env.OLLAMA_URL ?? "http://battleaxe:11434",
-    llmModel: (normCfg["model"] as string) ?? process.env.OLLAMA_MODEL ?? "qwen3:8b",
+  const ollamaUrl =
+    (normCfg["base_url"] as string) ??
+    process.env.OLLAMA_URL ??
+    "http://battleaxe:11434";
+
+  // Every adapter discovery query becomes its own stream; merge them so the
+  // pipeline sees a single continuous flow of listings from all sources. The
+  // streaming pipeline keeps every stage working concurrently — scraper, LLM,
+  // persist — so first results flow while later ones are still being fetched.
+  const available = adapters.filter((a) => {
+    if (!a.isAvailable()) {
+      skip("scan", `${a.marketplace_id}: adapter unavailable, skipping`);
+      return false;
+    }
+    return true;
   });
-  const schema = await getProductTypeSchema();
 
-  let totalOpportunities = 0;
+  if (available.length === 0) {
+    section("SCAN COMPLETE");
+    log("scan", "no adapters available");
+    return 0;
+  }
 
-  for (const adapter of adapters) {
-    if (!adapter.isAvailable()) {
-      skip("scan", `${adapter.marketplace_id}: adapter unavailable, skipping`);
-      continue;
+  // Record per-adapter scan log start.
+  const scanLogIds = new Map<string, number>();
+  for (const a of available) {
+    scanLogIds.set(a.marketplace_id, startScanLog(db, a.marketplace_id));
+    section(`${a.marketplace_id.toUpperCase()} SCAN`);
+  }
+
+  // Build one source stream per (adapter, query) and merge them all.
+  const sourceStreams: Array<AsyncIterable<any>> = [];
+  for (const a of available) {
+    const queries = a.discoveryQueries();
+    log("scan", `${a.marketplace_id}: ${queries.length} discovery queries`);
+    for (const q of queries) {
+      sourceStreams.push(searchAsStream(a, q));
     }
+  }
+  const mergedSource = merge(...sourceStreams);
 
-    section(`${adapter.marketplace_id.toUpperCase()} SCAN`);
+  const result = await runPipeline({
+    source: mergedSource,
+    llm: llm ?? undefined,
+    thresholds: {
+      minProfitUsd: minProfit,
+      minMarginPct: minMargin,
+      feeRate: 0.15,
+      shippingOutUsd: 5,
+    },
+    ollamaUrl,
+  });
 
-    // Start scan log
-    const scanLogId = startScanLog(db, adapter.marketplace_id);
-
-    // Discover inventory
-    const queries = adapter.discoveryQueries();
-    log("scan", `${adapter.marketplace_id}: running ${queries.length} discovery queries`);
-    const allListings: RawListing[] = [];
-    const seenIds = new Set<string>();
-
-    for (let qi = 0; qi < queries.length; qi++) {
-      const query = queries[qi];
-      log("scan", `query [${qi + 1}/${queries.length}]: "${query}"`);
-      const results = await adapter.search(query, { limit: 40 });
-      let newThisQuery = 0;
-      for (const listing of results) {
-        if (!seenIds.has(listing.listing_id)) {
-          seenIds.add(listing.listing_id);
-          allListings.push(listing);
-          newThisQuery++;
-        }
-      }
-      log("scan", `  → ${results.length} results, ${newThisQuery} new unique listings (${allListings.length} total)`);
-      if (!adapter.isAvailable()) {
-        error("scan", `${adapter.marketplace_id}: rate limit detected after query ${qi + 1}/${queries.length}`);
-        break; // rate limited
-      }
+  // Close any adapters that hold resources (Playwright browsers, etc.).
+  for (const a of available) {
+    if ("close" in a && typeof (a as any).close === "function") {
+      await (a as any).close();
     }
-
-    if (!allListings.length) {
-      log("scan", `${adapter.marketplace_id}: 0 listings found`);
-      finishScanLog(db, scanLogId, queries.length, 0, 0, !adapter.isAvailable());
-      continue;
-    }
-
-    log("scan", `${adapter.marketplace_id}: ${allListings.length} unique listings from ${queries.length} queries — processing...`);
-
-    // Process each listing: identify → match → price → opportunity
-    let nOpps = 0;
-    for (let i = 0; i < allListings.length; i++) {
-      const listing = allListings[i];
-      progress(i + 1, allListings.length, `${adapter.marketplace_id} listings`);
-      try {
-        const result = await pipeline.processListing(toRawListing(listing), schema, llm ?? undefined);
-        nOpps += result.opportunities.length;
-      } catch (err) {
-        error("scan", `pipeline error on ${listing.marketplace_id}/${listing.listing_id}`, err);
-      }
-    }
-
-    const rateLimited = !adapter.isAvailable();
-    finishScanLog(
-      db,
-      scanLogId,
-      queries.length,
-      allListings.length,
-      nOpps,
-      rateLimited,
-    );
-    totalOpportunities += nOpps;
-
-    log("scan", `${adapter.marketplace_id} summary: ${queries.length} queries, ${allListings.length} listings, ${nOpps} opportunities${rateLimited ? " [RATE LIMITED]" : ""}`);
-
-    if ("close" in adapter && typeof (adapter as any).close === "function") {
-      await (adapter as any).close();
+    const scanLogId = scanLogIds.get(a.marketplace_id);
+    if (scanLogId) {
+      // We don't break down per-adapter counts from the merged stream; log the
+      // overall scan totals against each adapter's row. Good enough for now.
+      finishScanLog(
+        db,
+        scanLogId,
+        a.discoveryQueries().length,
+        result.total,
+        result.opportunitiesFound,
+        !a.isAvailable(),
+      );
     }
   }
 
@@ -159,6 +148,14 @@ export async function runScan(
   log("scan", `watchlist: ${alertCount} new alert(s) triggered`);
 
   section("SCAN COMPLETE");
-  log("scan", `total opportunities found: ${totalOpportunities}`);
-  return totalOpportunities;
+  log(
+    "scan",
+    `total: ${result.total} items (fastPath=${result.fastPath} fullWalk=${result.fullWalk} errored=${result.errored}) opportunities=${result.opportunitiesFound}`,
+  );
+  if (result.errorsByStage.size > 0) {
+    for (const [stage, n] of result.errorsByStage) {
+      log("scan", `  errors in ${stage}: ${n}`);
+    }
+  }
+  return result.opportunitiesFound;
 }

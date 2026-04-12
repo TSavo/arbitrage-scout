@@ -423,6 +423,30 @@ export const embeddings = sqliteTable(
   ],
 );
 
+// ── HTTP Cache (durable response cache for all outbound API calls) ──
+
+export const httpCache = sqliteTable(
+  "http_cache",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    fingerprint: text("fingerprint").notNull(), // sha256(method|url|bodyHash)
+    method: text("method").notNull(),
+    url: text("url").notNull(),
+    bodyHash: text("body_hash").notNull(), // "-" for no body
+    status: integer("status").notNull(),
+    responseBody: text("response_body").notNull(),
+    contentType: text("content_type"),
+    fetchedAt: text("fetched_at").notNull(),
+    expiresAt: text("expires_at"), // null = never expires
+    hits: integer("hits").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("uq_http_cache_fp").on(table.fingerprint),
+    index("ix_http_cache_url").on(table.url),
+    index("ix_http_cache_expires").on(table.expiresAt),
+  ],
+);
+
 // ── Scan Logs ────────────────────────────────────────────────────────
 
 export const scanLogs = sqliteTable("scan_logs", {

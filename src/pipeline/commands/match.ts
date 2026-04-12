@@ -4,6 +4,7 @@ import { products, pricePoints } from '@/db/schema';
 import { eq, desc, and, gt, sql } from 'drizzle-orm';
 import { embeddingRepo } from '@/db/repos/EmbeddingRepo';
 import { productTypeRepo, type ProductTypeSchema } from '@/db/repos/ProductTypeRepo';
+import { cachedFetch } from '@/lib/cached_fetch';
 
 export interface MatchInput {
   readonly items: readonly ExtractedItem[];
@@ -159,15 +160,19 @@ export class EmbeddingStrategy implements MatchingStrategy {
       }
       const searchText = parts.filter(Boolean).join(' ');
 
-      const resp = await fetch(`${this.ollamaUrl}/api/embed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'qwen3-embedding:8b', input: searchText }),
-      });
+      const resp = await cachedFetch(
+        `${this.ollamaUrl}/api/embed`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'qwen3-embedding:8b', input: searchText }),
+        },
+        { ttlMs: null, cacheTag: 'embed' },
+      );
 
       if (!resp.ok) return null;
 
-      const data = (await resp.json()) as { embeddings?: number[][] };
+      const data = resp.json<{ embeddings?: number[][] }>();
       const queryVec = data.embeddings?.[0];
       if (!queryVec?.length) return null;
 

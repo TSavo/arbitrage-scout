@@ -19,6 +19,7 @@
 import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const GRAPHQL_URL = "https://api.whatnot.com/graphql/";
 const RATE_LIMIT_MS = 2000;
@@ -605,10 +606,13 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
 
     const t0 = Date.now();
     try {
-      const resp = await fetch(GRAPHQL_URL, {
+      const resp = await cachedFetch(GRAPHQL_URL, {
         method: "POST",
         headers,
         body: JSON.stringify({ operationName, variables, query }),
+      }, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "whatnot-search",
       });
 
       if (!resp.ok) {
@@ -620,7 +624,7 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
         return null;
       }
 
-      const data = (await resp.json()) as { data?: unknown; errors?: unknown[] };
+      const data = resp.json<{ data?: unknown; errors?: unknown[] }>();
       log("whatnot", `GraphQL ${operationName} elapsed=${Date.now() - t0}ms`);
 
       if (data.errors) {

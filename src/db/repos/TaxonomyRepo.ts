@@ -231,6 +231,12 @@ export class TaxonomyRepo {
     );
   }
 
+  /** All nodes in the tree — used for global similarity checks. */
+  async getAllNodes(): Promise<ReadonlyArray<TaxonomyNode>> {
+    const rows = await db.select().from(taxonomyNodes).orderBy(asc(taxonomyNodes.id));
+    return Object.freeze(rows.map(nodeFrom));
+  }
+
   async getPath(nodeId: number): Promise<ReadonlyArray<TaxonomyNode>> {
     const path: TaxonomyNode[] = [];
     let current: TaxonomyNode | null = await this.getNode(nodeId);

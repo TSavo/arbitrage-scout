@@ -47,3 +47,7 @@ config.yaml
 data/*.db
 data/*.db-*
 
+
+# Playwright persistent sessions (contain auth cookies)
+data/sessions/
+

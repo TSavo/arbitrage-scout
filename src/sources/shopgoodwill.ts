@@ -10,6 +10,7 @@
 import { createCipheriv, createHash } from "crypto";
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const API_ROOT = "https://buyerapi.shopgoodwill.com/api";
 
@@ -134,7 +135,7 @@ class ShopGoodwillSource {
     };
 
     try {
-      const res = await fetch(`${API_ROOT}/Search/ItemListing`, {
+      const res = await cachedFetch(`${API_ROOT}/Search/ItemListing`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -142,9 +143,12 @@ class ShopGoodwillSource {
           Authorization: `Bearer ${this._token}`,
         },
         body: JSON.stringify(params),
+      }, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "shopgoodwill-search",
       });
 
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = res.json<Record<string, unknown>>();
       const items = ((data.searchResults as Record<string, unknown>)?.items as Record<string, unknown>[]) ?? [];
       const parsed = items.map(_parseItem).filter((x): x is GoodwillItem => x !== null);
       log("shopgoodwill", `search "${query}" → ${parsed.length} items elapsed=${Date.now() - t0}ms`);

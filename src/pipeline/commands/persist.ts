@@ -48,6 +48,7 @@ const EXTERNAL_ID_KEYS: ReadonlyArray<readonly [string, string]> = Object.freeze
   ["epid", "ebay_epid"],
   ["isbn", "isbn"],
   ["mpn", "mpn"],
+  ["klwines_sku", "klwines_sku"],
 ]);
 
 export async function persist(input: PersistInput): Promise<PersistResult> {

@@ -1,6 +1,7 @@
 import { and, eq, isNull, sql, inArray } from "drizzle-orm";
 import { db } from "../client";
 import { embeddings, products } from "../schema";
+import { cachedFetch } from "@/lib/cached_fetch";
 import { log, error } from "@/lib/logger";
 
 function floatsToBuffer(vec: number[]): Buffer {
@@ -91,16 +92,20 @@ export class EmbeddingRepo {
     log("embedding", `MISS ${entityType}:${entityId} — calling Ollama`);
     const t0 = Date.now();
     try {
-      const resp = await fetch(`${ollamaUrl}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
-      });
+      const resp = await cachedFetch(
+        `${ollamaUrl}/api/embed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
+        },
+        { ttlMs: null, cacheTag: "embed" },
+      );
       if (!resp.ok) {
         error("embedding", `Ollama ${resp.status} after ${Date.now() - t0}ms`);
         return null;
       }
-      const data = (await resp.json()) as { embeddings?: number[][] };
+      const data = resp.json<{ embeddings?: number[][] }>();
       const vec = data.embeddings?.[0];
       if (!vec?.length) {
         error("embedding", `Ollama returned no vector after ${Date.now() - t0}ms`);
@@ -137,19 +142,23 @@ export class EmbeddingRepo {
 
     const t0 = Date.now();
     try {
-      const resp = await fetch(`${ollamaUrl}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "qwen3-embedding:8b",
-          input: uncached.map((u) => u.text),
-        }),
-      });
+      const resp = await cachedFetch(
+        `${ollamaUrl}/api/embed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3-embedding:8b",
+            input: uncached.map((u) => u.text),
+          }),
+        },
+        { ttlMs: null, cacheTag: "embed-batch" },
+      );
       if (!resp.ok) {
         error("embedding", `Ollama batch ${resp.status} after ${Date.now() - t0}ms`);
         return 0;
       }
-      const data = (await resp.json()) as { embeddings?: number[][] };
+      const data = resp.json<{ embeddings?: number[][] }>();
       const vecs = data.embeddings;
       if (!vecs || vecs.length !== uncached.length) {
         error("embedding", `Ollama returned ${vecs?.length ?? 0} vecs for ${uncached.length} inputs`);

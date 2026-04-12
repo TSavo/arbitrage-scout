@@ -96,6 +96,7 @@ async function llmConfirm(
 
     const metaParts = Object.entries(item.metadata || {})
       .filter(([, v]) => v)
+      .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`);
     const metaStr = metaParts.length ? ` | ${metaParts.join(', ')}` : '';
 

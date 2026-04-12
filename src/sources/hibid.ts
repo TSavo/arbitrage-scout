@@ -9,6 +9,7 @@
 import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const GRAPHQL_URL = "https://hibid.com/graphql";
 const RATE_LIMIT_MS = 5000; // 1 req per 5 seconds
@@ -156,7 +157,7 @@ export class HiBidAdapter implements IMarketplaceAdapter {
     await this.rateLimit();
 
     const t0 = Date.now();
-    const resp = await fetch(GRAPHQL_URL, {
+    const resp = await cachedFetch(GRAPHQL_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -164,6 +165,9 @@ export class HiBidAdapter implements IMarketplaceAdapter {
         Cookie: this.cookies,
       },
       body: JSON.stringify({ operationName, variables, query }),
+    }, {
+      ttlMs: 10 * 60 * 1000,
+      cacheTag: "hibid-search",
     });
 
     if (!resp.ok) {
@@ -175,7 +179,7 @@ export class HiBidAdapter implements IMarketplaceAdapter {
       return null;
     }
 
-    const data = await resp.json();
+    const data = resp.json();
     log("hibid", `GraphQL ${operationName} elapsed=${Date.now() - t0}ms`);
     return (data as { data: unknown }).data;
   }

@@ -14,6 +14,7 @@
 
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const DISCOGS_BASE = "https://api.discogs.com";
 const USER_AGENT = "arbitrage-scout-ts/1.0 +https://github.com/wopr-network/arbitrage-scout-ts";
@@ -74,7 +75,10 @@ async function _rateLimit(): Promise<void> {
 
 // ── Low-level HTTP ────────────────────────────────────────────────────
 
-async function _get(path: string): Promise<Record<string, unknown>> {
+async function _get(
+  path: string,
+  cacheOpts: { ttlMs: number | null; cacheTag: string } = { ttlMs: 10 * 60 * 1000, cacheTag: "discogs-search" },
+): Promise<Record<string, unknown>> {
   await _rateLimit();
   const url = `${DISCOGS_BASE}${path}`;
   const t0 = Date.now();
@@ -86,11 +90,11 @@ async function _get(path: string): Promise<Record<string, unknown>> {
   if (token) {
     headers["Authorization"] = `Discogs token=${token}`;
   }
-  const res = await fetch(url, { headers });
+  const res = await cachedFetch(url, { headers }, cacheOpts);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} from ${url}`);
   }
-  const data = (await res.json()) as Record<string, unknown>;
+  const data = res.json<Record<string, unknown>>();
   log("discogs", `GET ${path} elapsed=${Date.now() - t0}ms`);
   return data;
 }
@@ -110,6 +114,7 @@ export class DiscogsSource {
       const perPage = Math.min(limit, 100);
       const data = await _get(
         `/database/search?q=${encodeURIComponent(query)}&type=release&per_page=${perPage}&page=1`,
+        { ttlMs: 10 * 60 * 1000, cacheTag: "discogs-search" },
       );
       const results = (data.results as Record<string, unknown>[]) ?? [];
       const parsed = results.slice(0, limit).map(_parseSearchResult);
@@ -127,7 +132,7 @@ export class DiscogsSource {
   async getRelease(id: number): Promise<DiscogsReleaseDetail | null> {
     log("discogs", `getRelease id=${id}`);
     try {
-      const data = await _get(`/releases/${id}`);
+      const data = await _get(`/releases/${id}`, { ttlMs: null, cacheTag: "discogs-detail" });
       return _parseReleaseDetail(data);
     } catch (err) {
       error("discogs", `getRelease id=${id} failed`, err);
@@ -142,7 +147,7 @@ export class DiscogsSource {
   async getLowestPrice(id: number): Promise<number | null> {
     log("discogs", `getLowestPrice id=${id}`);
     try {
-      const data = await _get(`/releases/${id}`);
+      const data = await _get(`/releases/${id}`, { ttlMs: null, cacheTag: "discogs-detail" });
       const price = (data.lowest_price as number | null) ?? null;
       const numForSale = (data.num_for_sale as number) ?? 0;
       log(

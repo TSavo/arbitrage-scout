@@ -10,6 +10,7 @@
 import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const RATE_LIMIT_MS = 2500;
 
@@ -148,10 +149,13 @@ export class LiveAuctioneersAdapter implements IMarketplaceAdapter {
 
     const t0 = Date.now();
     try {
-      const resp = await fetch(this.searchUrl, {
+      const resp = await cachedFetch(this.searchUrl, {
         method: "POST",
         headers: this.searchHeaders,
         body,
+      }, {
+        ttlMs: 10 * 60 * 1000,
+        cacheTag: "liveauctioneers-search",
       });
 
       if (!resp.ok) {
@@ -159,7 +163,7 @@ export class LiveAuctioneersAdapter implements IMarketplaceAdapter {
         return [];
       }
 
-      const data = await resp.json() as Record<string, unknown>;
+      const data = resp.json<Record<string, unknown>>();
       const items = this.extractItems(data);
       log("liveauctioneers", `API returned ${items.length} items elapsed=${Date.now() - t0}ms`);
 

@@ -73,6 +73,36 @@ export interface IMarketplaceAdapter {
     options?: { max_price?: number; limit?: number },
   ): Promise<RawListing[]>;
 
+  /**
+   * Streaming variant of search — yields listings as they're scraped so that
+   * the pipeline can start processing page 1's results while the scraper is
+   * still clicking to page 3. Default implementation falls back to search()
+   * and yields its array, but adapters with expensive scraping (Playwright,
+   * paginated APIs) should override to yield incrementally.
+   */
+  stream?(
+    query: string,
+    options?: { max_price?: number; limit?: number },
+  ): AsyncIterable<RawListing>;
+
   /** Can we use this marketplace right now? (auth OK, not rate-limited) */
   isAvailable(): boolean;
+}
+
+/**
+ * Default stream() for adapters that only implement search(). Not as good as
+ * a real incremental stream (you wait for the whole search to finish before
+ * the first item emerges), but lets the pipeline still work uniformly.
+ */
+export async function* searchAsStream(
+  adapter: IMarketplaceAdapter,
+  query: string,
+  options?: { max_price?: number; limit?: number },
+): AsyncIterable<RawListing> {
+  if (adapter.stream) {
+    yield* adapter.stream(query, options);
+    return;
+  }
+  const listings = await adapter.search(query, options);
+  for (const l of listings) yield l;
 }

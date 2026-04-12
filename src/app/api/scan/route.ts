@@ -21,6 +21,12 @@ function buildConfig() {
     pricecharting: {
       api_key: process.env.PC_API_KEY || "",
     },
+    klwines: {
+      userDataDir: process.env.KLWINES_USER_DATA_DIR,
+      cdpPort: process.env.KLWINES_CDP_PORT
+        ? parseInt(process.env.KLWINES_CDP_PORT, 10)
+        : undefined,
+    },
     normalizer: {
       provider: "ollama",
       base_url: process.env.OLLAMA_URL || "http://battleaxe:11434",

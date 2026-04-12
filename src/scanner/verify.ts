@@ -10,6 +10,7 @@ import { db } from "@/db/client";
 import { opportunities, listings } from "@/db/schema";
 import { eq, and, notInArray } from "drizzle-orm";
 import { log, section, progress } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 export interface VerifyResult {
   checked: number;
@@ -63,11 +64,15 @@ export async function verifyOpportunityUrls(opts: {
     progress(i + 1, toCheck.length, "URLs verified");
 
     try {
-      const resp = await fetch(opp.url!, {
-        redirect: "follow",
-        headers: { "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(10000),
-      });
+      const resp = await cachedFetch(
+        opp.url!,
+        {
+          redirect: "follow",
+          headers: { "User-Agent": "Mozilla/5.0" },
+          signal: AbortSignal.timeout(10000),
+        },
+        { ttlMs: 10 * 60 * 1000, cacheTag: "verify-url" },
+      );
 
       if (!resp.ok) {
         // 404 or error — listing is gone
@@ -77,7 +82,7 @@ export async function verifyOpportunityUrls(opts: {
         continue;
       }
 
-      const html = await resp.text();
+      const html = resp.text();
       // Extract page title
       const titleMatch = html.match(/<title[^>]*>([^<]+)</i);
       const pageTitle = titleMatch?.[1]?.trim() ?? "";

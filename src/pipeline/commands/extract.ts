@@ -310,7 +310,8 @@ function buildListingContext(listing: ExtractInput['listing']): string {
   if (listing.seller) lines.push(`Seller: ${listing.seller}`);
   if (listing.imageUrl) lines.push(`Image: ${listing.imageUrl}`);
   if (listing.extra) {
-    for (const [k, v] of Object.entries(listing.extra)) {
+    const entries = Object.entries(listing.extra).sort(([a], [b]) => a.localeCompare(b));
+    for (const [k, v] of entries) {
       if (v && k !== 'pc_product_id') {
         lines.push(`${k}: ${v}`);
       }

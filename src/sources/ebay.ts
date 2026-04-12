@@ -9,6 +9,10 @@
 
 import { IMarketplaceAdapter, RawListing, makeRawListing } from "./IMarketplaceAdapter";
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
+
+const EBAY_SEARCH_TTL_MS = 10 * 60 * 1000; // 10 min — search results churn
+const EBAY_DETAIL_TTL_MS = null; // listings are immutable once seen
 
 const PROD_API_BASE = "https://api.ebay.com";
 const SANDBOX_API_BASE = "https://api.sandbox.ebay.com";
@@ -185,19 +189,20 @@ export class EbayAdapter implements IMarketplaceAdapter {
 
     const headers = await this._authHeaders();
     const t0 = Date.now();
-    const res = await fetch(
+    const res = await cachedFetch(
       `${this._base}/buy/browse/v1/item_summary/search?${params}`,
       { headers },
+      { ttlMs: EBAY_SEARCH_TTL_MS, cacheTag: "ebay-search" },
     );
 
     if (!res.ok) {
       if (res.status === 429) error("ebay", `Browse API rate limited (429) elapsed=${Date.now() - t0}ms`);
-      throw new Error(`eBay Browse API ${res.status}: ${res.statusText}`);
+      throw new Error(`eBay Browse API ${res.status}`);
     }
 
-    const data = (await res.json()) as { itemSummaries?: Record<string, unknown>[] };
+    const data = res.json<{ itemSummaries?: Record<string, unknown>[] }>();
     const items = data.itemSummaries ?? [];
-    log("ebay", `Browse API returned ${items.length} items elapsed=${Date.now() - t0}ms`);
+    log("ebay", `Browse API returned ${items.length} items elapsed=${Date.now() - t0}ms fromCache=${res.fromCache}`);
     return items;
   }
 
@@ -207,15 +212,16 @@ export class EbayAdapter implements IMarketplaceAdapter {
     log("ebay", `fetching description for itemId=${itemId}`);
     try {
       const headers = await this._authHeaders();
-      const res = await fetch(
+      const res = await cachedFetch(
         `${this._base}/buy/browse/v1/item/v1|${itemId}|0`,
         { headers },
+        { ttlMs: EBAY_DETAIL_TTL_MS, cacheTag: "ebay-detail" },
       );
       if (!res.ok) {
         error("ebay", `getItemDescription ${itemId} HTTP ${res.status} (${Date.now() - t0}ms)`);
         return null;
       }
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = res.json<Record<string, unknown>>();
       let desc = (data.description as string | undefined) ??
         (data.shortDescription as string | undefined) ?? "";
       if (desc) {
@@ -252,12 +258,12 @@ export class EbayAdapter implements IMarketplaceAdapter {
       `&sortOrder=EndTimeSoonest`;
 
     try {
-      const res = await fetch(url);
+      const res = await cachedFetch(url, {}, { ttlMs: EBAY_SEARCH_TTL_MS, cacheTag: "ebay-sold" });
       if (!res.ok) {
         error("ebay", `Finding API HTTP ${res.status} for ${JSON.stringify(query)} — likely rate-limited (${Date.now() - t0}ms)`);
         return [];
       }
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = res.json<Record<string, unknown>>();
 
       if ("errorMessage" in data) {
         const errors = ((data.errorMessage as unknown[])[0] as Record<string, unknown[]>).error ?? [];

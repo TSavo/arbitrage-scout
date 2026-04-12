@@ -12,6 +12,7 @@ import {
 } from "../db/schema";
 import type { RawListing } from "../sources/IMarketplaceAdapter";
 import { log } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -227,17 +228,21 @@ export function buildLlm(normCfg: Record<string, unknown>): LlmClient | null {
       };
       if (opts?.system) body["system"] = opts.system;
 
-      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await cachedFetch(
+        `${baseUrl.replace(/\/$/, "")}/api/generate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        { ttlMs: null, cacheTag: "llm" },
+      );
 
       if (!res.ok) {
-        throw new Error(`Ollama HTTP ${res.status}: ${await res.text()}`);
+        throw new Error(`Ollama HTTP ${res.status}: ${res.body.slice(0, 200)}`);
       }
 
-      const data = (await res.json()) as { response?: string };
+      const data = res.json<{ response?: string }>();
       const text = data.response;
       if (typeof text !== "string") throw new Error("Unexpected Ollama response shape");
 

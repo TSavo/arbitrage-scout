@@ -16,6 +16,7 @@ import { TcgPlayerMarketAdapter } from "./tcgplayer_market";
 import { MercariAdapter } from "./mercari";
 import { LiveAuctioneersAdapter } from "./liveauctioneers";
 import { WhatnotAdapter } from "./whatnot";
+import { KlwinesAdapter } from "./klwines";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -50,6 +51,8 @@ export interface AdapterConfig {
   liveauctioneers?: { enabled?: boolean };
   /** Whatnot — no credentials needed, uses Playwright for GraphQL interception */
   whatnot?: { enabled?: boolean };
+  /** K&L Wines — requires a pre-authenticated Chrome session on :9222 (see scripts/klwines_login.ts) */
+  klwines?: { enabled?: boolean; userDataDir?: string; cdpPort?: number };
 }
 
 /**
@@ -149,6 +152,25 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "built WhatnotAdapter (Playwright + GraphQL)");
   } else {
     log("registry", "WhatnotAdapter skipped (disabled in config)");
+  }
+
+  // K&L Wines — enabled by default; KlwinesAdapter.isAvailable() returns false
+  // when the session dir doesn't exist (i.e. user hasn't run the login script),
+  // and search() degrades to [] if Chrome isn't on the CDP port.
+  const klCfg = cfg.klwines ?? {};
+  if (klCfg.enabled !== false) {
+    const kl = new KlwinesAdapter({
+      userDataDir: klCfg.userDataDir,
+      cdpPort: klCfg.cdpPort,
+    });
+    if (kl.isAvailable()) {
+      adapters.push(kl);
+      log("registry", `built KlwinesAdapter userDataDir=${klCfg.userDataDir ?? "(default)"} cdp=:${klCfg.cdpPort ?? 9222}`);
+    } else {
+      log("registry", "KlwinesAdapter skipped (no session dir — run scripts/klwines_login.ts first)");
+    }
+  } else {
+    log("registry", "KlwinesAdapter skipped (disabled in config)");
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);

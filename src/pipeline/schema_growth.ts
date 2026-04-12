@@ -21,6 +21,7 @@ import {
   type CreateFieldParams,
 } from "@/db/repos/TaxonomyRepo";
 import { embeddingRepo } from "@/db/repos/EmbeddingRepo";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 export interface ProposedField {
   readonly key: string;
@@ -69,7 +70,13 @@ export interface SchemaGrowthConfig {
 
 const DEFAULT_CONFIG: SchemaGrowthConfig = {
   frequencyThreshold: 3,
-  similarityThreshold: 0.95,
+  // 0.82 with embeddings catches true near-duplicates (whisky↔whiskey,
+  // spirits↔liquor_spirits, wines↔wine, single_malt↔single_malt_scotch)
+  // without merging genuinely distinct categories.
+  similarityThreshold: 0.82,
+  // Real embedding similarity — the string-overlap fallback can't tell
+  // "spirits" from "liquor_spirits" because token overlap is too coarse.
+  ollamaUrl: process.env.OLLAMA_URL ?? "http://battleaxe:11434",
 };
 
 function normalizeSlug(raw: string): string {
@@ -80,6 +87,7 @@ function normalizeSlug(raw: string): string {
     .replace(/^_+|_+$/g, "")
     .slice(0, 64);
 }
+
 
 export class SchemaGrowthService {
   private readonly config: SchemaGrowthConfig;
@@ -264,14 +272,37 @@ export class SchemaGrowthService {
     parentId: number,
     proposal: NodeProposal,
   ): Promise<TaxonomyNode | null> {
+    // Check siblings at this parent AND all existing nodes anywhere in the tree.
+    // A new "video_games" under root shouldn't create a duplicate if "video_games"
+    // already exists elsewhere (e.g. under electronics).
     const siblings = await taxonomyRepo.getChildren(parentId);
-    if (siblings.length === 0) return null;
+    const allNodes = await taxonomyRepo.getAllNodes();
+    // Siblings first (more relevant for true merges), then the rest.
+    const siblingIds = new Set(siblings.map((s) => s.id));
+    const candidates = [
+      ...siblings,
+      ...allNodes.filter((n) => !siblingIds.has(n.id) && n.id !== 1 /* skip root */),
+    ];
+    if (candidates.length === 0) return null;
 
     const proposalText = this.nodeText(proposal.label, proposal.description);
+    const proposalSlug = proposal.slug.toLowerCase();
     const proposalVec = await this.embed(proposalText);
 
+    // First pass: exact slug match anywhere in tree → strong duplicate signal.
+    for (const n of candidates) {
+      if (n.slug.toLowerCase() === proposalSlug) return n;
+    }
+
+    // Second pass: near-duplicate slugs (substring containment, edit distance).
+    // Catches whisky↔whiskey, wines↔wine, spirits↔liquor_spirits — all cases
+    // a weak string-overlap metric misses. Works independent of embeddings.
+    for (const n of candidates) {
+      if (slugsLookLikeDuplicates(n.slug, proposalSlug)) return n;
+    }
+
     if (proposalVec) {
-      for (const s of siblings) {
+      for (const s of candidates) {
         const sibText = this.nodeText(s.label, s.description ?? "");
         const sibVec = await this.embed(sibText);
         if (!sibVec) continue;
@@ -282,7 +313,7 @@ export class SchemaGrowthService {
     }
 
     // Embedding fallback — deterministic string-overlap sanity check.
-    for (const s of siblings) {
+    for (const s of candidates) {
       const sim = stringOverlap(
         proposalText.toLowerCase(),
         this.nodeText(s.label, s.description ?? "").toLowerCase(),
@@ -300,13 +331,17 @@ export class SchemaGrowthService {
     const url = this.config.ollamaUrl;
     if (!url) return null;
     try {
-      const resp = await fetch(`${url}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
-      });
+      const resp = await cachedFetch(
+        `${url}/api/embed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
+        },
+        { ttlMs: null, cacheTag: "embed" },
+      );
       if (!resp.ok) return null;
-      const data = (await resp.json()) as { embeddings?: number[][] };
+      const data = resp.json<{ embeddings?: number[][] }>();
       return data.embeddings?.[0] ?? null;
     } catch {
       return null;
@@ -338,6 +373,59 @@ function stringOverlap(a: string, b: string): number {
   for (const t of aTokens) if (bTokens.has(t)) shared++;
   const union = new Set([...aTokens, ...bTokens]).size;
   return shared / union;
+}
+
+/**
+ * Pure slug/label near-duplicate heuristic — catches the cases the embedding
+ * similarity gate is supposed to catch but where we want a hard signal
+ * independent of model availability. Returns true when the proposed slug
+ * collides with an existing one by:
+ *   - exact match (after normalization)
+ *   - substring containment (spirits / liquor_spirits, wine / wines)
+ *   - small edit distance on normalized slugs (whisky / whiskey, rose / rose_wine)
+ */
+function slugsLookLikeDuplicates(a: string, b: string): boolean {
+  const na = a.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const nb = b.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // Substring containment with a length-ratio gate. "spirits" vs
+  // "liquor_spirits" (7/13 = 0.54) should match; "alcohol" vs
+  // "alcoholic_beverages" (7/19 = 0.37) should not — the shorter slug is
+  // only a fragment of the longer's semantic content.
+  if (na.includes(nb) || nb.includes(na)) {
+    const shorter = na.length < nb.length ? na : nb;
+    const longer = na.length < nb.length ? nb : na;
+    if (shorter.length >= 4 && shorter.length / longer.length >= 0.4) {
+      return true;
+    }
+  }
+  // Edit-distance bound — small typos / variants (whisky vs whiskey, wine
+  // vs wines).
+  if (Math.abs(na.length - nb.length) <= 2) {
+    const maxLen = Math.max(na.length, nb.length);
+    if (maxLen <= 12 && levenshtein(na, nb) <= 1) return true;
+    if (maxLen <= 20 && levenshtein(na, nb) <= 2) return true;
+  }
+  return false;
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
 }
 
 // Tag unused to satisfy strict lint when embedding stub isn't wired.

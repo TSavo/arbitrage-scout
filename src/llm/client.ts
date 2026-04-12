@@ -10,6 +10,7 @@
  *   OLLAMA_MODEL — default qwen3:8b
  */
 
+import { cachedFetch } from "@/lib/cached_fetch";
 import { log, error } from "@/lib/logger";
 
 const DEFAULT_URL = process.env.OLLAMA_URL ?? "http://battleaxe:11434";
@@ -67,24 +68,31 @@ export async function generate(
   const t0 = Date.now();
   log("llm/client", `generate model=${model} promptLen=${prompt.length} url=${baseUrl}`);
 
-  const res = await fetch(`${baseUrl}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await cachedFetch(
+    `${baseUrl}/api/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    { ttlMs: null, cacheTag: "llm" },
+  );
 
   if (!res.ok) {
-    error("llm/client", `generate failed: ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
-    throw new OllamaError(`Ollama generate failed: ${res.status} ${res.statusText}`);
+    error("llm/client", `generate failed: ${res.status} (${Date.now() - t0}ms)`);
+    throw new OllamaError(`Ollama generate failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as Record<string, unknown>;
+  const data = res.json<Record<string, unknown>>();
   const text = data["response"];
   if (typeof text !== "string") {
     error("llm/client", `unexpected response shape after ${Date.now() - t0}ms`);
     throw new OllamaError(`Unexpected Ollama response shape: ${JSON.stringify(data)}`);
   }
-  log("llm/client", `generate OK responseLen=${text.length} elapsed=${Date.now() - t0}ms`);
+  log(
+    "llm/client",
+    `generate OK responseLen=${text.length} elapsed=${Date.now() - t0}ms fromCache=${res.fromCache}`,
+  );
   return text;
 }
 
@@ -116,23 +124,30 @@ export async function embed(text: string): Promise<number[]> {
   const t0 = Date.now();
   log("llm/client", `embed model=${EMBED_MODEL} inputLen=${text.length}`);
 
-  const res = await fetch(`${baseUrl}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBED_MODEL, input: text }),
-  });
+  const res = await cachedFetch(
+    `${baseUrl}/api/embed`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBED_MODEL, input: text }),
+    },
+    { ttlMs: null, cacheTag: "embed" },
+  );
 
   if (!res.ok) {
-    error("llm/client", `embed failed: ${res.status} ${res.statusText} (${Date.now() - t0}ms)`);
-    throw new OllamaError(`Ollama embed failed: ${res.status} ${res.statusText}`);
+    error("llm/client", `embed failed: ${res.status} (${Date.now() - t0}ms)`);
+    throw new OllamaError(`Ollama embed failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as { embeddings?: number[][] };
+  const data = res.json<{ embeddings?: number[][] }>();
   const vec = data.embeddings?.[0];
   if (!vec) {
     error("llm/client", `embed returned no vector after ${Date.now() - t0}ms`);
     throw new OllamaError(`Ollama embed returned no embeddings for input: ${text.slice(0, 80)}`);
   }
-  log("llm/client", `embed OK dim=${vec.length} elapsed=${Date.now() - t0}ms`);
+  log(
+    "llm/client",
+    `embed OK dim=${vec.length} elapsed=${Date.now() - t0}ms fromCache=${res.fromCache}`,
+  );
   return vec;
 }

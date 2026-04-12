@@ -77,6 +77,11 @@ try { sqlite.exec(`ALTER TABLE product_types ADD COLUMN description TEXT`); } ca
 // Products.metadata column (idempotent)
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`); } catch {}
 
+// Drop legacy embedding BLOB column — vectors live in sqlite-vec's vec_embeddings
+// virtual table now. The Drizzle embeddings table is metadata-only (entity_type,
+// entity_id, embedded_at). Requires SQLite >= 3.35.
+try { sqlite.exec(`ALTER TABLE embeddings DROP COLUMN embedding`); } catch {}
+
 // Price points dimensions column + data migration (idempotent)
 try {
   sqlite.exec(`ALTER TABLE price_points ADD COLUMN dimensions TEXT NOT NULL DEFAULT '{}'`);
@@ -214,6 +219,26 @@ sqlite.exec(`
 `);
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_schema_versions_created ON schema_versions(created_at)`);
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_schema_versions_node ON schema_versions(node_id)`);
+
+// HTTP response cache (idempotent) — every outbound API call flows through here
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS http_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    method TEXT NOT NULL,
+    url TEXT NOT NULL,
+    body_hash TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    response_body TEXT NOT NULL,
+    content_type TEXT,
+    fetched_at TEXT NOT NULL,
+    expires_at TEXT,
+    hits INTEGER NOT NULL DEFAULT 0
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_http_cache_fp ON http_cache(fingerprint)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_http_cache_url ON http_cache(url)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_http_cache_expires ON http_cache(expires_at)`);
 
 // Products: taxonomy link + extraction watermark (idempotent)
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN taxonomy_node_id INTEGER`); } catch {}

@@ -9,6 +9,7 @@
  */
 
 import { log, error } from "@/lib/logger";
+import { cachedFetch } from "@/lib/cached_fetch";
 
 const TCGCSV_BASE = "https://tcgcsv.com/tcgplayer";
 
@@ -35,11 +36,13 @@ export interface TcgProductWithPrice {
 
 async function _getJson(url: string): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const res = await fetch(url, {
-    headers: { "User-Agent": "arbitrage-scout-ts/1.0" },
-  });
+  const res = await cachedFetch(
+    url,
+    { headers: { "User-Agent": "arbitrage-scout-ts/1.0" } },
+    { ttlMs: 12 * 60 * 60 * 1000, cacheTag: "tcgcsv-ref" },
+  );
   if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-  const data = (await res.json()) as Record<string, unknown>;
+  const data = res.json<Record<string, unknown>>();
   log("tcgcsv", `GET ${url} elapsed=${Date.now() - t0}ms`);
   return data;
 }
