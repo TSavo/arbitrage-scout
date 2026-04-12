@@ -12,7 +12,6 @@ import {
   listingItems,
   products,
   productIdentifiers,
-  productTypes,
 } from "@/db/schema";
 import { embeddingRepo } from "@/db/repos/EmbeddingRepo";
 import type { ValidatedListing } from "../types";
@@ -113,7 +112,6 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
 
     await db.insert(products).values({
       id: productId,
-      productTypeId: await resolveLegacyProductTypeId(),
       taxonomyNodeId: input.nodeId,
       extractedSchemaVersion: input.schemaVersion > 0 ? input.schemaVersion : null,
       title: input.product.title,
@@ -159,7 +157,6 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
     if (!exists) {
       await db.insert(products).values({
         id: productId,
-        productTypeId: await resolveLegacyProductTypeId(),
         taxonomyNodeId: input.nodeId,
         extractedSchemaVersion:
           input.schemaVersion > 0 ? input.schemaVersion : null,
@@ -251,24 +248,6 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
     isNewProduct,
     isNewListing,
   });
-}
-
-/**
- * Legacy `products.product_type_id` is NOT NULL with an FK to product_types.
- * The new pipeline doesn't use this field — but we still need to supply a
- * valid value. Prefer "generic" if it exists, otherwise fall back to any
- * existing product type.
- */
-async function resolveLegacyProductTypeId(): Promise<string> {
-  const generic = await db.query.productTypes.findFirst({
-    where: eq(productTypes.id, "generic"),
-    columns: { id: true },
-  });
-  if (generic) return generic.id;
-  const any = await db.query.productTypes.findFirst({
-    columns: { id: true },
-  });
-  return any?.id ?? "generic";
 }
 
 function metadataFromFields(

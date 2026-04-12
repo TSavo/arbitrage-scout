@@ -12,10 +12,10 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   products,
-  productTypes,
   productIdentifiers,
   pricePoints,
   marketplaces,
+  taxonomyNodes,
 } from "@/db/schema";
 import { cfg } from "./helpers";
 import { log, section, progress } from "@/lib/logger";
@@ -45,18 +45,26 @@ const CSV_FILES: Record<string, string> = {
   "/tmp/pc-coins.csv": "coins",
 };
 
-/** Map PriceCharting CSV category → product_type_id */
-const CSV_CATEGORY_MAP: Record<string, string> = {
-  videogames: "retro_game",
-  pokemon: "pokemon_card",
-  magic: "mtg_card",
-  yugioh: "yugioh_card",
-  onepiece: "onepiece_card",
-  funko: "funko_pop",
-  lego: "lego_set",
-  comics: "comic",
-  coins: "coin",
+/** Map PriceCharting CSV category → canonical taxonomy path. */
+const CSV_TAXONOMY_PATH: Record<string, string> = {
+  videogames: "/electronics/video_games/physical_game_media",
+  pokemon: "/collectibles/trading_cards/pokemon",
+  magic: "/collectibles/trading_cards/mtg",
+  yugioh: "/collectibles/trading_cards/yugioh",
+  onepiece: "/collectibles/trading_cards/one_piece",
+  funko: "/collectibles/figures/funko_pop",
+  lego: "/toys_games/building_sets/lego",
+  comics: "/collectibles/comics",
+  coins: "/collectibles/coins",
 };
+
+async function resolveTaxonomyNodeId(path: string): Promise<number | null> {
+  const node = await db.query.taxonomyNodes.findFirst({
+    where: eq(taxonomyNodes.pathCache, path),
+    columns: { id: true },
+  });
+  return node?.id ?? null;
+}
 
 /** PriceCharting condition field → our condition name */
 const CONDITION_MAP: Record<string, string> = {
@@ -105,83 +113,6 @@ function parseCsvLine(line: string): string[] {
 
 // ── Seeding ───────────────────────────────────────────────────────────
 
-function seedProductTypes(): void {
-  const defaults: (typeof productTypes.$inferInsert)[] = [
-    {
-      id: "retro_game",
-      name: "Retro Video Game",
-      conditionSchema: ["loose", "cib", "new_sealed", "graded", "box_only", "manual_only"],
-      metadataSchema: ["region", "variant"],
-    },
-    {
-      id: "pokemon_card",
-      name: "Pokemon Card",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["set_name", "card_number", "rarity", "edition", "holo_type", "language", "grade", "grading_company"],
-    },
-    {
-      id: "mtg_card",
-      name: "Magic: The Gathering Card",
-      conditionSchema: ["loose", "foil", "graded"],
-      metadataSchema: ["set_name", "foil", "language", "grade", "grading_company"],
-    },
-    {
-      id: "sports_card",
-      name: "Sports Card",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["player", "year", "brand", "variant", "grade", "grading_company"],
-    },
-    {
-      id: "comic",
-      name: "Comic Book",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["publisher", "issue", "year", "grade", "grading_company"],
-    },
-    {
-      id: "yugioh_card",
-      name: "Yu-Gi-Oh Card",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["set_name", "rarity", "edition", "language", "grade", "grading_company"],
-    },
-    {
-      id: "onepiece_card",
-      name: "One Piece Card",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["set_name", "rarity", "language", "grade", "grading_company"],
-    },
-    {
-      id: "funko_pop",
-      name: "Funko Pop",
-      conditionSchema: ["loose", "in_box", "graded"],
-      metadataSchema: ["series", "number", "exclusive", "chase", "variant"],
-    },
-    {
-      id: "lego_set",
-      name: "LEGO Set",
-      conditionSchema: ["loose", "cib", "new_sealed"],
-      metadataSchema: ["theme", "set_number", "piece_count", "year"],
-    },
-    {
-      id: "coin",
-      name: "Coin",
-      conditionSchema: ["loose", "graded"],
-      metadataSchema: ["year", "mint", "denomination", "grade", "grading_company"],
-    },
-  ];
-
-  for (const pt of defaults) {
-    const existing = db
-      .select({ id: productTypes.id })
-      .from(productTypes)
-      .where(eq(productTypes.id, pt.id))
-      .limit(1)
-      .all();
-    if (!existing.length) {
-      db.insert(productTypes).values(pt).run();
-    }
-  }
-}
-
 function seedMarketplaces(): void {
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
@@ -201,30 +132,6 @@ function seedMarketplaces(): void {
   }
 }
 
-// ── FTS5 index ────────────────────────────────────────────────────────
-
-function rebuildFtsIndex(): void {
-  log("stock", "rebuilding FTS5 search index...");
-  const start = Date.now();
-  db.run(sql`
-    CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
-      product_id,
-      title,
-      platform,
-      product_type_id,
-      content='products',
-      content_rowid='rowid'
-    )
-  `);
-  db.run(sql`DELETE FROM products_fts`);
-  db.run(sql`
-    INSERT INTO products_fts(product_id, title, platform, product_type_id)
-    SELECT id, title, platform, product_type_id FROM products
-  `);
-  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-  log("stock", `FTS5 index rebuilt in ${elapsed}s`);
-}
-
 // ── CSV loader ────────────────────────────────────────────────────────
 
 async function loadCsv(
@@ -232,7 +139,14 @@ async function loadCsv(
   category: string,
 ): Promise<CsvResult> {
   log("stock", `loading CSV: ${csvPath} (category: ${category})`);
-  const productTypeId = CSV_CATEGORY_MAP[category] ?? category;
+  const path = CSV_TAXONOMY_PATH[category];
+  if (!path) {
+    throw new Error(`stock: no taxonomy path mapped for CSV category "${category}"`);
+  }
+  const taxonomyNodeId = await resolveTaxonomyNodeId(path);
+  if (!taxonomyNodeId) {
+    throw new Error(`stock: taxonomy node not found for path "${path}" (run seed-taxonomy first)`);
+  }
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const now = new Date().toISOString();
 
@@ -320,7 +234,7 @@ async function loadCsv(
 
       productsBatch.push({
         id: productId,
-        productTypeId,
+        taxonomyNodeId,
         title: name,
         platform: consoleName || null,
         releaseDate: row["release-date"] || null,
@@ -401,7 +315,6 @@ async function loadCsv(
  * Returns total number of products loaded.
  */
 export async function runStock(config: Config): Promise<number> {
-  seedProductTypes();
   seedMarketplaces();
 
   let total = 0;
@@ -420,11 +333,6 @@ export async function runStock(config: Config): Promise<number> {
     total += result.count;
     allNewProducts.push(...result.newProducts);
     log("stock", `${category}: ${result.count} products loaded from ${csvPath.split("/").pop()}`);
-  }
-
-  if (total > 0) {
-    section("FTS5 INDEX REBUILD");
-    rebuildFtsIndex();
   }
 
   // Load TCGplayer prices as a second pricing source alongside PriceCharting.

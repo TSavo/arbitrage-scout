@@ -30,7 +30,8 @@ export async function detectTrends(
     minChangeUsd?: number;
     condition?: string;
     limit?: number;
-    productType?: string;
+    /** Taxonomy node id to restrict to (subtree). */
+    taxonomyNodeId?: number;
   } = {},
 ): Promise<{ risers: PriceMover[]; fallers: PriceMover[] }> {
   const minPct = opts.minChangePct ?? 10;
@@ -40,11 +41,10 @@ export async function detectTrends(
 
   section("TREND DETECTION");
 
-  // Get price changes between two most recent dates
   const changes = await pricePointRepo.findPriceChanges({
     condition,
     minPriceUsd: 5,
-    limit: 10_000, // get all, filter below
+    limit: 10_000,
   });
 
   if (changes.length === 0) {
@@ -56,10 +56,9 @@ export async function detectTrends(
   const previousDate = changes[0].oldDate;
   log("trends", `comparing ${previousDate} → ${currentDate}`);
 
-  // Build a set of product IDs for type filtering
   let typeProductIds: Set<string> | null = null;
-  if (opts.productType) {
-    const typeProducts = await productRepo.findByType(opts.productType, { limit: 100_000 });
+  if (opts.taxonomyNodeId !== undefined) {
+    const typeProducts = await productRepo.findByNode(opts.taxonomyNodeId, { limit: 100_000 });
     typeProductIds = new Set(typeProducts.map((p) => p.id));
   }
 

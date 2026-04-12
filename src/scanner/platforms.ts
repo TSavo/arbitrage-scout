@@ -8,14 +8,16 @@
  * - Supply constraints (fewer copies = scarcer = eventual price increase)
  */
 
-import { and, eq, gte, sql, desc, asc } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { products, pricePoints } from "@/db/schema";
 import { log, section } from "@/lib/logger";
 
 export interface PlatformProfile {
   platform: string;
-  productType: string;
+  /** Taxonomy node id the platform's products live under. */
+  taxonomyNodeId: number | null;
+  /** Canonical path of that node (e.g. /electronics/video_games/physical_game_media). */
+  taxonomyPath: string;
   productCount: number;
   avgLoose: number;
   medianLoose: number;
@@ -24,42 +26,29 @@ export interface PlatformProfile {
   cibToLooseRatio: number;
   totalVolume: number;
   avgVolume: number;
-  pctAbove50: number; // % of products worth >$50
+  pctAbove50: number;
   pctAbove100: number;
   top5Products: Array<{ title: string; loosePrice: number; volume: number }>;
 }
 
 /**
- * Profile every platform in the catalog.
+ * Profile every platform in the catalog, optionally restricted to a taxonomy subtree.
  */
 export function profilePlatforms(
-  opts: { productType?: string; minProducts?: number } = {},
+  opts: { taxonomyPathPrefix?: string; minProducts?: number } = {},
 ): PlatformProfile[] {
   const minProducts = opts.minProducts ?? 20;
 
   section("PLATFORM ANALYSIS");
 
-  // Alias tables for the three condition joins
-  const ppLoose = db.$with("pp_loose").as(
-    db
-      .select({
-        productId: pricePoints.productId,
-        priceUsd: pricePoints.priceUsd,
-      })
-      .from(pricePoints)
-      .where(and(eq(pricePoints.condition, "loose"), gte(pricePoints.priceUsd, 0.01))),
-  );
+  const subtreeFilter = opts.taxonomyPathPrefix
+    ? sql`AND t.path_cache LIKE ${opts.taxonomyPathPrefix + "%"}`
+    : sql``;
 
-  // Build conditions for main query
-  const conditions = [sql`pp_loose.price_usd IS NOT NULL`];
-  if (opts.productType) {
-    conditions.push(eq(products.productTypeId, opts.productType));
-  }
-
-  // Get platform stats using Drizzle sql template for complex aggregates
   const platforms = db.all<{
     platform: string;
-    product_type_id: string;
+    taxonomy_node_id: number;
+    taxonomy_path: string;
     product_count: number;
     avg_loose: number;
     avg_cib: number | null;
@@ -69,7 +58,8 @@ export function profilePlatforms(
   }>(sql`
     SELECT
       p.platform,
-      p.product_type_id,
+      p.taxonomy_node_id,
+      t.path_cache as taxonomy_path,
       COUNT(DISTINCT p.id) as product_count,
       ROUND(AVG(pp_loose.price_usd), 2) as avg_loose,
       ROUND(AVG(pp_cib.price_usd), 2) as avg_cib,
@@ -77,6 +67,7 @@ export function profilePlatforms(
       SUM(p.sales_volume) as total_volume,
       ROUND(AVG(p.sales_volume), 1) as avg_volume
     FROM products p
+    JOIN taxonomy_nodes t ON t.id = p.taxonomy_node_id
     LEFT JOIN price_points pp_loose ON pp_loose.product_id = p.id
       AND pp_loose.condition = 'loose' AND pp_loose.price_usd > 0
     LEFT JOIN price_points pp_cib ON pp_cib.product_id = p.id
@@ -84,8 +75,8 @@ export function profilePlatforms(
     LEFT JOIN price_points pp_new ON pp_new.product_id = p.id
       AND pp_new.condition = 'new_sealed' AND pp_new.price_usd > 0
     WHERE pp_loose.price_usd IS NOT NULL
-      ${opts.productType ? sql`AND p.product_type_id = ${opts.productType}` : sql``}
-    GROUP BY p.platform, p.product_type_id
+      ${subtreeFilter}
+    GROUP BY p.platform, p.taxonomy_node_id, t.path_cache
     HAVING product_count >= ${minProducts}
     ORDER BY avg_loose ASC
   `);
@@ -95,7 +86,6 @@ export function profilePlatforms(
   for (const plat of platforms) {
     log("platforms", `profiling ${plat.platform} (${plat.product_count} products)...`);
 
-    // Median loose price
     const medianRow = db.get<{ price_usd: number }>(sql`
       SELECT pp.price_usd FROM price_points pp
       JOIN products p ON p.id = pp.product_id
@@ -108,7 +98,6 @@ export function profilePlatforms(
       )
     `);
 
-    // % above $50 and $100
     const thresholds = db.get<{ pct_50: number; pct_100: number }>(sql`
       SELECT
         SUM(CASE WHEN pp.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as pct_50,
@@ -118,7 +107,6 @@ export function profilePlatforms(
       WHERE p.platform = ${plat.platform} AND pp.condition = 'loose' AND pp.price_usd > 0
     `);
 
-    // Top 5 by volume
     const top5 = db.all<{ title: string; loose_price: number; volume: number }>(sql`
       SELECT p.title, pp.price_usd as loose_price, p.sales_volume as volume
       FROM products p
@@ -130,7 +118,8 @@ export function profilePlatforms(
 
     profiles.push({
       platform: plat.platform,
-      productType: plat.product_type_id,
+      taxonomyNodeId: plat.taxonomy_node_id,
+      taxonomyPath: plat.taxonomy_path,
       productCount: plat.product_count,
       avgLoose: plat.avg_loose,
       medianLoose: medianRow?.price_usd ?? 0,
@@ -154,24 +143,22 @@ export function profilePlatforms(
 
 /**
  * Find undervalued platforms — low prices but high activity.
- * These are the ones most likely to appreciate.
+ * Default scope: retro games (/electronics/video_games/physical_game_media).
  */
 export function findUndervaluedPlatforms(
-  opts: { productType?: string } = {},
+  opts: { taxonomyPathPrefix?: string } = {},
 ): PlatformProfile[] {
-  const profiles = profilePlatforms({ ...opts, minProducts: 30 });
+  const prefix = opts.taxonomyPathPrefix ?? "/electronics/video_games/physical_game_media";
+  const profiles = profilePlatforms({ taxonomyPathPrefix: prefix, minProducts: 30 });
 
-  // Score each platform: high volume + low median price = undervalued
-  // Normalize both to 0-1 range, then combine
   const maxVolume = Math.max(...profiles.map((p) => p.avgVolume));
   const maxMedian = Math.max(...profiles.map((p) => p.medianLoose));
 
   const scored = profiles
-    .filter((p) => p.productType === "retro_game") // focus on games for now
     .map((p) => {
-      const volumeScore = p.avgVolume / maxVolume; // higher = more active
-      const priceScore = 1 - p.medianLoose / maxMedian; // lower price = higher score
-      const ratioScore = Math.min(p.cibToLooseRatio / 5, 1); // high CIB/loose ratio = box matters = collectible
+      const volumeScore = p.avgVolume / maxVolume;
+      const priceScore = 1 - p.medianLoose / maxMedian;
+      const ratioScore = Math.min(p.cibToLooseRatio / 5, 1);
       const combined = volumeScore * 0.4 + priceScore * 0.3 + ratioScore * 0.3;
       return { ...p, undervalueScore: combined };
     })

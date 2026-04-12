@@ -1,27 +1,40 @@
 import { and, desc, eq, gte, lte, like, sql } from "drizzle-orm";
 import { db } from "../client";
-import { products, pricePoints } from "../schema";
+import { products, pricePoints, taxonomyNodes } from "../schema";
 import type { IRepository } from "./IRepository";
 
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;
 
-export interface FindByTypeOpts {
+export interface FindByNodeOpts {
   limit?: number;
   offset?: number;
 }
 
 export interface FindTopByVolumeOpts {
-  productTypeId?: string;
+  /** Taxonomy subtree: match products whose taxonomy node is this node or any descendant. */
+  taxonomyNodeId?: number;
   minPrice?: number;
   maxPrice?: number;
   limit?: number;
 }
 
 export interface SearchOpts {
-  productTypeId?: string;
+  taxonomyNodeId?: number;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * Resolve a taxonomy node id to its path_cache prefix for subtree queries.
+ * Returns null if the node doesn't exist.
+ */
+async function subtreePrefix(nodeId: number): Promise<string | null> {
+  const row = await db.query.taxonomyNodes.findFirst({
+    where: eq(taxonomyNodes.id, nodeId),
+    columns: { pathCache: true },
+  });
+  return row ? `${row.pathCache}%` : null;
 }
 
 export class ProductRepo implements IRepository<Product, string> {
@@ -71,30 +84,37 @@ export class ProductRepo implements IRepository<Product, string> {
     return rows.length;
   }
 
-  /** Filter products by product type. */
-  async findByType(productTypeId: string, opts?: FindByTypeOpts): Promise<Product[]> {
-    return db.query.products.findMany({
-      where: eq(products.productTypeId, productTypeId),
-      limit: opts?.limit,
-      offset: opts?.offset,
-      orderBy: (p, { desc }) => [desc(p.salesVolume)],
-    });
+  /** Filter products by taxonomy subtree (the node itself + descendants). */
+  async findByNode(taxonomyNodeId: number, opts?: FindByNodeOpts): Promise<Product[]> {
+    const prefix = await subtreePrefix(taxonomyNodeId);
+    if (!prefix) return [];
+    const rows = db
+      .select()
+      .from(products)
+      .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
+      .where(like(taxonomyNodes.pathCache, prefix))
+      .orderBy(desc(products.salesVolume))
+      .limit(opts?.limit ?? 1000)
+      .offset(opts?.offset ?? 0)
+      .all();
+    return rows.map((r) => r.products);
   }
 
   /**
-   * Top products by sales volume, optionally filtered by type and price range.
+   * Top products by sales volume, optionally filtered by taxonomy subtree and price range.
    * Joins to pricePoints to apply price filters. Used for query generation.
    */
   async findTopByVolume(opts: FindTopByVolumeOpts = {}): Promise<Product[]> {
-    const { productTypeId, minPrice, maxPrice, limit = 50 } = opts;
+    const { taxonomyNodeId, minPrice, maxPrice, limit = 50 } = opts;
 
     const conditions = [];
-    if (productTypeId) {
-      conditions.push(eq(products.productTypeId, productTypeId));
+    let prefix: string | null = null;
+    if (taxonomyNodeId !== undefined) {
+      prefix = await subtreePrefix(taxonomyNodeId);
+      if (!prefix) return [];
     }
 
     if (minPrice !== undefined || maxPrice !== undefined) {
-      // Join through pricePoints — return products that have at least one price in range
       const priceConditions = [];
       if (minPrice !== undefined) priceConditions.push(gte(pricePoints.priceUsd, minPrice));
       if (maxPrice !== undefined) priceConditions.push(lte(pricePoints.priceUsd, maxPrice));
@@ -104,9 +124,19 @@ export class ProductRepo implements IRepository<Product, string> {
         .from(pricePoints)
         .where(and(...priceConditions));
 
-      conditions.push(
-        sql`${products.id} IN (${subquery})`
-      );
+      conditions.push(sql`${products.id} IN (${subquery})`);
+    }
+
+    if (prefix) {
+      const rows = db
+        .select()
+        .from(products)
+        .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
+        .where(and(like(taxonomyNodes.pathCache, prefix), ...conditions))
+        .orderBy(desc(products.salesVolume))
+        .limit(limit)
+        .all();
+      return rows.map((r) => r.products);
     }
 
     return db.query.products.findMany({
@@ -117,32 +147,46 @@ export class ProductRepo implements IRepository<Product, string> {
   }
 
   /**
-   * Full-text search on title using LIKE. For FTS5, use the sqlite raw connection directly.
-   * Optionally narrows by product type.
+   * Full-text search on title using LIKE.
+   * Optionally narrows by taxonomy subtree.
    */
   async search(query: string, opts?: SearchOpts): Promise<Product[]> {
     const pattern = `%${query}%`;
-    const conditions = [like(products.title, pattern)];
 
-    if (opts?.productTypeId) {
-      conditions.push(eq(products.productTypeId, opts.productTypeId));
+    if (opts?.taxonomyNodeId !== undefined) {
+      const prefix = await subtreePrefix(opts.taxonomyNodeId);
+      if (!prefix) return [];
+      const rows = db
+        .select()
+        .from(products)
+        .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
+        .where(and(like(products.title, pattern), like(taxonomyNodes.pathCache, prefix)))
+        .orderBy(desc(products.salesVolume))
+        .limit(opts?.limit ?? 20)
+        .offset(opts?.offset ?? 0)
+        .all();
+      return rows.map((r) => r.products);
     }
 
     return db.query.products.findMany({
-      where: and(...conditions),
+      where: like(products.title, pattern),
       limit: opts?.limit ?? 20,
       offset: opts?.offset,
       orderBy: (p, { desc }) => [desc(p.salesVolume)],
     });
   }
+
   /**
-   * Get platform statistics aggregated by platform and product type.
-   * Joins products with price_points to compute aggregates.
+   * Platform statistics aggregated by platform and taxonomy node.
+   * Useful for breakdowns like "retro games by console" — the node
+   * label is the bucket label.
    */
   async getPlatformStats(): Promise<
     Array<{
       platform: string;
-      productTypeId: string;
+      nodeId: number | null;
+      nodeLabel: string;
+      nodePath: string;
       productCount: number;
       avgLoose: number;
       totalVolume: number;
@@ -154,7 +198,9 @@ export class ProductRepo implements IRepository<Product, string> {
     const rows = await db
       .select({
         platform: products.platform,
-        productTypeId: products.productTypeId,
+        nodeId: products.taxonomyNodeId,
+        nodeLabel: taxonomyNodes.label,
+        nodePath: taxonomyNodes.pathCache,
         productCount: sql<number>`cast(count(distinct ${products.id}) as integer)`,
         avgLoose: sql<number>`round(avg(${pricePoints.priceUsd}), 2)`,
         totalVolume: sql<number>`cast(coalesce(sum(${products.salesVolume}), 0) as integer)`,
@@ -171,13 +217,16 @@ export class ProductRepo implements IRepository<Product, string> {
           gte(pricePoints.priceUsd, 0.01),
         ),
       )
-      .groupBy(products.platform, products.productTypeId)
+      .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
+      .groupBy(products.platform, products.taxonomyNodeId, taxonomyNodes.label, taxonomyNodes.pathCache)
       .having(sql`count(distinct ${products.id}) >= 20`)
       .orderBy(sql`avg(${products.salesVolume}) desc`);
 
     return rows.map((r) => ({
       platform: r.platform ?? "",
-      productTypeId: r.productTypeId,
+      nodeId: r.nodeId ?? null,
+      nodeLabel: r.nodeLabel ?? "",
+      nodePath: r.nodePath ?? "",
       productCount: r.productCount,
       avgLoose: r.avgLoose,
       totalVolume: r.totalVolume,

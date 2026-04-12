@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, like, or, sql } from "drizzle-orm";
 import { db } from "../client";
-import { pricePoints, products } from "../schema";
+import { pricePoints, products, taxonomyNodes } from "../schema";
 import type { IRepository } from "./IRepository";
 
 export type PricePoint = typeof pricePoints.$inferSelect;
@@ -182,7 +182,8 @@ export class PricePointRepo implements IRepository<PricePoint, number> {
    */
   async findLatestPricesBySource(opts?: {
     condition?: string;
-    productTypeId?: string;
+    /** Taxonomy subtree filter: match products under a node (by id or slug-path prefix). */
+    taxonomyNodeId?: number;
   }): Promise<
     Array<{
       productId: string;
@@ -226,8 +227,17 @@ export class PricePointRepo implements IRepository<PricePoint, number> {
       .from(pricePoints)
       .innerJoin(maxDates, and(...conditions));
 
-    if (opts?.productTypeId) {
-      // Filter by product type via join to products
+    if (opts?.taxonomyNodeId) {
+      // Subtree filter: products whose taxonomy node is this node or any
+      // descendant. path_cache uses slug paths — match the node's own
+      // path_cache as a prefix.
+      const root = await db.query.taxonomyNodes.findFirst({
+        where: eq(taxonomyNodes.id, opts.taxonomyNodeId),
+        columns: { pathCache: true },
+      });
+      if (!root) return [];
+      const prefix = `${root.pathCache}%`;
+
       return db
         .select({
           productId: pricePoints.productId,
@@ -244,9 +254,10 @@ export class PricePointRepo implements IRepository<PricePoint, number> {
           eq(pricePoints.recordedAt, maxDates.maxDate),
         ))
         .innerJoin(products, eq(pricePoints.productId, products.id))
+        .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
         .where(
           and(
-            eq(products.productTypeId, opts.productTypeId),
+            like(taxonomyNodes.pathCache, prefix),
             ...(opts?.condition ? [eq(pricePoints.condition, opts.condition)] : []),
           ),
         );

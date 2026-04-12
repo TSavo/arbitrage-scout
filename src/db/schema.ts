@@ -7,77 +7,6 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-// ── Product Types ────────────────────────────────────────────────────
-
-export const productTypes = sqliteTable("product_types", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  /** @deprecated — superseded by product_type_fields + is_pricing_axis / enum values. */
-  conditionSchema: text("condition_schema", { mode: "json" })
-    .notNull()
-    .$type<string[]>()
-    .default([]),
-  /** @deprecated — superseded by product_type_fields. */
-  metadataSchema: text("metadata_schema", { mode: "json" })
-    .notNull()
-    .$type<string[]>()
-    .default([]),
-});
-
-// ── Product Type Fields (DB-driven schema) ───────────────────────────
-
-export const productTypeFields = sqliteTable(
-  "product_type_fields",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    productTypeId: text("product_type_id")
-      .notNull()
-      .references(() => productTypes.id),
-    key: text("key").notNull(),
-    label: text("label").notNull(),
-    dataType: text("data_type").notNull(), // "string" | "number" | "boolean"
-
-    pattern: text("pattern"),
-    minValue: real("min_value"),
-    maxValue: real("max_value"),
-    isInteger: integer("is_integer", { mode: "boolean" }).notNull().default(false),
-
-    format: text("format"),
-    unit: text("unit"),
-    extractHint: text("extract_hint"),
-
-    isRequired: integer("is_required", { mode: "boolean" }).notNull().default(false),
-    isSearchable: integer("is_searchable", { mode: "boolean" }).notNull().default(false),
-    searchWeight: real("search_weight").notNull().default(1.0),
-    isIdentifier: integer("is_identifier", { mode: "boolean" }).notNull().default(false),
-    isPricingAxis: integer("is_pricing_axis", { mode: "boolean" }).notNull().default(false),
-    displayPriority: integer("display_priority").notNull().default(100),
-    isHidden: integer("is_hidden", { mode: "boolean" }).notNull().default(false),
-  },
-  (t) => [
-    uniqueIndex("uq_product_type_field_key").on(t.productTypeId, t.key),
-    index("ix_pricing_axis").on(t.isPricingAxis),
-    index("ix_identifier").on(t.isIdentifier),
-    index("ix_searchable").on(t.isSearchable),
-  ],
-);
-
-export const productTypeFieldEnumValues = sqliteTable(
-  "product_type_field_enum_values",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    fieldId: integer("field_id")
-      .notNull()
-      .references(() => productTypeFields.id, { onDelete: "cascade" }),
-    value: text("value").notNull(),
-    label: text("label").notNull(),
-    description: text("description"),
-    displayOrder: integer("display_order").notNull().default(100),
-  },
-  (t) => [uniqueIndex("uq_field_enum_value").on(t.fieldId, t.value)],
-);
-
 // ── Taxonomy (DB-driven hierarchical product tree) ───────────────────
 
 export const taxonomyNodes = sqliteTable(
@@ -183,9 +112,6 @@ export const products = sqliteTable(
   "products",
   {
     id: text("id").primaryKey(),
-    productTypeId: text("product_type_id")
-      .notNull()
-      .references(() => productTypes.id),
     taxonomyNodeId: integer("taxonomy_node_id"),
     extractedSchemaVersion: integer("extracted_schema_version"),
     title: text("title").notNull(),
@@ -193,7 +119,7 @@ export const products = sqliteTable(
     releaseDate: text("release_date"),
     genre: text("genre"),
     salesVolume: integer("sales_volume").notNull().default(0),
-    /** DB-driven metadata keyed by product_type_fields.key. */
+    /** DB-driven metadata keyed by taxonomy_node_fields.key. */
     metadata: text("metadata", { mode: "json" })
       .notNull()
       .$type<Record<string, unknown>>()
@@ -202,7 +128,6 @@ export const products = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("ix_products_type_volume").on(table.productTypeId, table.salesVolume),
     index("ix_products_taxonomy_node").on(table.taxonomyNodeId),
   ],
 );

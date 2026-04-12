@@ -896,8 +896,6 @@ export async function seedTaxonomy(): Promise<SeedResult> {
   }
 
   // 3. Domain hierarchy — each DOMAIN entry's slug is an anchor slug.
-  const legacyTypeMappings = new Map<string, number>();
-
   async function walk(parentId: number, node: NodeSeed): Promise<number> {
     const id = await ensureNode({
       parentId,
@@ -919,10 +917,6 @@ export async function seedTaxonomy(): Promise<SeedResult> {
           }
         }
       }
-    }
-
-    if (node.productTypeMapping) {
-      legacyTypeMappings.set(node.productTypeMapping, id);
     }
 
     if (node.children) {
@@ -958,30 +952,11 @@ export async function seedTaxonomy(): Promise<SeedResult> {
     }
   }
 
-  // 4. Migrate existing products: set taxonomyNodeId based on productTypeId.
-  let productsLinked = 0;
-  for (const [productTypeId, nodeId] of legacyTypeMappings) {
-    const res = await db
-      .update(products)
-      .set({ taxonomyNodeId: nodeId })
-      .where(
-        sql`${products.productTypeId} = ${productTypeId} AND (${products.taxonomyNodeId} IS NULL)`,
-      );
-    // better-sqlite3 doesn't return affected on update via drizzle — do a
-    // count query to report progress.
-    void res;
-    const [{ cnt }] = await db
-      .select({ cnt: sql<number>`count(*)` })
-      .from(products)
-      .where(eq(products.productTypeId, productTypeId));
-    productsLinked += cnt;
-  }
-
   log(
     "seed-taxonomy",
-    `nodes: ${nodeCount} | fields: ${fieldCount} | enum values: ${enumCount} | products linked: ${productsLinked}`,
+    `nodes: ${nodeCount} | fields: ${fieldCount} | enum values: ${enumCount}`,
   );
-  return { nodes: nodeCount, fields: fieldCount, enumValues: enumCount, productsLinked };
+  return { nodes: nodeCount, fields: fieldCount, enumValues: enumCount, productsLinked: 0 };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

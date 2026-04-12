@@ -301,136 +301,6 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
     createdBy: "test-seed",
   }).run();
 
-  // Product types (legacy conditionSchema/metadataSchema left empty — the
-  // DB-driven schema comes from product_type_fields).
-  db.insert(schema.productTypes).values({
-    id: "retro_game",
-    name: "Retro Video Game",
-    conditionSchema: ["loose", "cib", "new_sealed"],
-    metadataSchema: ["region", "variant"],
-  }).run();
-
-  db.insert(schema.productTypes).values({
-    id: "pokemon_card",
-    name: "Pokemon Card",
-    conditionSchema: ["loose", "graded"],
-    metadataSchema: ["set_name", "card_number"],
-  }).run();
-
-  db.insert(schema.productTypes).values({
-    id: "bourbon",
-    name: "Bourbon",
-    conditionSchema: [],
-    metadataSchema: [],
-  }).run();
-
-  db.insert(schema.productTypes).values({
-    id: "sports_card",
-    name: "Sports Card",
-    conditionSchema: [],
-    metadataSchema: [],
-  }).run();
-
-  // Generic fallback product type used when the new taxonomy-driven pipeline
-  // creates a product but has no legacy product_type mapping.
-  db.insert(schema.productTypes).values({
-    id: "generic",
-    name: "Generic",
-    conditionSchema: [],
-    metadataSchema: [],
-  }).run();
-
-  // Product type fields (DB-driven schema)
-  const retroCondition = db.insert(schema.productTypeFields).values({
-    productTypeId: "retro_game", key: "condition", label: "Condition",
-    dataType: "string", isPricingAxis: true, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: false, displayPriority: 5, isHidden: false,
-  }).returning({ id: schema.productTypeFields.id }).get();
-
-  for (const [i, v] of ["loose", "cib", "new_sealed"].entries()) {
-    db.insert(schema.productTypeFieldEnumValues).values({
-      fieldId: retroCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
-    }).run();
-  }
-
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "retro_game", key: "platform", label: "Platform",
-    dataType: "string", isPricingAxis: false, isSearchable: true,
-    searchWeight: 2, isIdentifier: false, isRequired: false,
-    isInteger: false, displayPriority: 20, isHidden: false,
-  }).run();
-
-  const pokeCondition = db.insert(schema.productTypeFields).values({
-    productTypeId: "pokemon_card", key: "condition", label: "Condition",
-    dataType: "string", isPricingAxis: true, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: false, displayPriority: 5, isHidden: false,
-  }).returning({ id: schema.productTypeFields.id }).get();
-  for (const [i, v] of ["loose", "graded"].entries()) {
-    db.insert(schema.productTypeFieldEnumValues).values({
-      fieldId: pokeCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
-    }).run();
-  }
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "pokemon_card", key: "set_name", label: "Set",
-    dataType: "string", isPricingAxis: false, isSearchable: true,
-    searchWeight: 3, isIdentifier: true, isRequired: false,
-    isInteger: false, displayPriority: 10, isHidden: false,
-  }).run();
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "pokemon_card", key: "card_number", label: "Card #",
-    dataType: "string", isPricingAxis: false, isSearchable: true,
-    searchWeight: 3, isIdentifier: true, isRequired: false,
-    isInteger: false, displayPriority: 20, isHidden: false,
-  }).run();
-
-  // Bourbon: no pricing axes, just descriptive fields
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "bourbon", key: "distillery", label: "Distillery",
-    dataType: "string", isPricingAxis: false, isSearchable: true,
-    searchWeight: 3, isIdentifier: false, isRequired: true,
-    isInteger: false, displayPriority: 10, isHidden: false,
-  }).run();
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "bourbon", key: "age", label: "Age",
-    dataType: "number", isPricingAxis: false, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: true, displayPriority: 20, isHidden: false,
-  }).run();
-
-  // Sports card: multi-axis pricing (condition + grade + grading_company)
-  const sportsCondition = db.insert(schema.productTypeFields).values({
-    productTypeId: "sports_card", key: "condition", label: "Condition",
-    dataType: "string", isPricingAxis: true, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: false, displayPriority: 5, isHidden: false,
-  }).returning({ id: schema.productTypeFields.id }).get();
-  for (const [i, v] of ["raw", "graded"].entries()) {
-    db.insert(schema.productTypeFieldEnumValues).values({
-      fieldId: sportsCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
-    }).run();
-  }
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "sports_card", key: "grade", label: "Grade",
-    dataType: "number", isPricingAxis: true, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: false, minValue: 1, maxValue: 10,
-    displayPriority: 6, isHidden: false,
-  }).run();
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "sports_card", key: "grading_company", label: "Grading company",
-    dataType: "string", isPricingAxis: true, isSearchable: false,
-    searchWeight: 1, isIdentifier: false, isRequired: false,
-    isInteger: false, displayPriority: 7, isHidden: false,
-  }).run();
-  db.insert(schema.productTypeFields).values({
-    productTypeId: "sports_card", key: "player", label: "Player",
-    dataType: "string", isPricingAxis: false, isSearchable: true,
-    searchWeight: 3, isIdentifier: false, isRequired: true,
-    isInteger: false, displayPriority: 10, isHidden: false,
-  }).run();
-
   // Marketplaces
   db.insert(schema.marketplaces).values({ id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true }).run();
   db.insert(schema.marketplaces).values({ id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true }).run();
@@ -458,31 +328,31 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
     }).run();
   }
 
-  // Products — include taxonomyNodeId so tier-1/tier-2 paths can resolve the node.
+  // Products — all linked to taxonomy nodes (legacy productTypeId is gone).
   db.insert(schema.products).values({
-    id: "pc-1", productTypeId: "retro_game", taxonomyNodeId: retroNode.id,
+    id: "pc-1", taxonomyNodeId: retroNode.id,
     title: "Super Mario 64",
     platform: "Nintendo 64", salesVolume: 5000, createdAt: now, updatedAt: now,
   }).run();
 
   db.insert(schema.products).values({
-    id: "pc-2", productTypeId: "retro_game", taxonomyNodeId: retroNode.id,
+    id: "pc-2", taxonomyNodeId: retroNode.id,
     title: "GoldenEye 007",
     platform: "Nintendo 64", salesVolume: 3000, createdAt: now, updatedAt: now,
   }).run();
 
   db.insert(schema.products).values({
-    id: "pc-3", productTypeId: "pokemon_card", title: "Charizard VMAX",
+    id: "pc-3", title: "Charizard VMAX",
     platform: "Pokemon Darkness Ablaze", salesVolume: 8000, createdAt: now, updatedAt: now,
   }).run();
 
   db.insert(schema.products).values({
-    id: "pc-bourbon-1", productTypeId: "bourbon", title: "Pappy Van Winkle 23",
+    id: "pc-bourbon-1", title: "Pappy Van Winkle 23",
     salesVolume: 100, createdAt: now, updatedAt: now,
   }).run();
 
   db.insert(schema.products).values({
-    id: "pc-sports-1", productTypeId: "sports_card", title: "Mickey Mantle 1952 Topps",
+    id: "pc-sports-1", title: "Mickey Mantle 1952 Topps",
     salesVolume: 500, createdAt: now, updatedAt: now,
   }).run();
 
