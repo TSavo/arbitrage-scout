@@ -120,23 +120,6 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
       createdAt: now,
       updatedAt: now,
     });
-
-    // Record any external identifiers present in extra.
-    const extra = input.listing.extra ?? {};
-    for (const [key, type] of EXTERNAL_ID_KEYS) {
-      const raw = extra[key];
-      if (raw === undefined || raw === null) continue;
-      const value = typeof raw === "string" ? raw.trim() : String(raw).trim();
-      if (!value) continue;
-      await db
-        .insert(productIdentifiers)
-        .values({
-          productId,
-          identifierType: type,
-          identifierValue: value,
-        })
-        .onConflictDoNothing();
-    }
   } else {
     // Update schema watermark if schema has moved forward.
     if (input.schemaVersion > 0) {
@@ -168,6 +151,26 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
       });
       isNewProduct = true;
     }
+  }
+
+  // Opportunistically index every external identifier the listing carries
+  // — always, not just on new products. If resolve_identity matched an
+  // existing Luxardo product via embeddings and the new B&B listing brings
+  // a UPC, we upgrade that product so future scans hit external_id fastPath.
+  const extra = input.listing.extra ?? {};
+  for (const [key, type] of EXTERNAL_ID_KEYS) {
+    const raw = extra[key];
+    if (raw === undefined || raw === null) continue;
+    const value = typeof raw === "string" ? raw.trim() : String(raw).trim();
+    if (!value) continue;
+    await db
+      .insert(productIdentifiers)
+      .values({
+        productId,
+        identifierType: type,
+        identifierValue: value,
+      })
+      .onConflictDoNothing();
   }
 
   // ── 3. Upsert listing_items link ──────────────────────────────────
