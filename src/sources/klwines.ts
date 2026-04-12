@@ -16,15 +16,15 @@
  * the full page.
  */
 
-import { chromium, type Browser, type Page } from "playwright";
+import { type Page } from "playwright";
 import { resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import {
   IMarketplaceAdapter,
   RawListing,
   makeRawListing,
 } from "./IMarketplaceAdapter";
+import { getSharedContext } from "@/lib/shared_browser";
 import { log, error } from "@/lib/logger";
 
 const PAGE_SIZE = 50;
@@ -71,14 +71,11 @@ function humanDelay(): Promise<void> {
   return sleep(ms);
 }
 const DEFAULT_USER_DATA_DIR = resolve("data/sessions/klwines");
-const DEFAULT_CDP_PORT = 9222;
-const CHROME_PATH =
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 export interface KlwinesConfig {
   readonly userDataDir?: string;
   readonly cdpPort?: number;
-  /** Auto-spawn Chrome if no CDP is running. Defaults true. */
+  /** @deprecated — no longer used. Shared browser handles connection. */
   readonly autoSpawn?: boolean;
 }
 
@@ -106,6 +103,10 @@ interface FeedRow {
   readonly currentBidUsd?: number;
   /** Auction only: full lot description (e.g. "2002 Plantation 15 Year Old Barbados Rum (qty: 1)"). */
   readonly lotDescription?: string;
+  /** Auction only: the marketing blurb text ("Bid on this bottle of..."
+   *  or the full editorial description if K&L included one). Passed to
+   *  the LLM as listing description. */
+  readonly description?: string;
   /** Either feed: image URL if present. */
   readonly imageUrl?: string;
 }
@@ -114,16 +115,10 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
   readonly marketplace_id = "klwines";
 
   private readonly userDataDir: string;
-  private readonly cdpPort: number;
-  private readonly autoSpawn: boolean;
-  private _spawned: ChildProcess | null = null;
-  private _browser: Browser | null = null;
   private _lastError: string | null = null;
 
   constructor(cfg: KlwinesConfig = {}) {
     this.userDataDir = cfg.userDataDir ?? DEFAULT_USER_DATA_DIR;
-    this.cdpPort = cfg.cdpPort ?? DEFAULT_CDP_PORT;
-    this.autoSpawn = cfg.autoSpawn ?? true;
   }
 
   isAvailable(): boolean {
@@ -227,6 +222,18 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
 
     log("klwines", `stream(${def.name}, kind=${kind}) → navigating`);
     await page.goto(def.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+
+    // K&L sits behind a Cloudflare managed challenge that serves an
+    // interstitial 403 HTML page first; Chrome's built-in JS execution
+    // solves the challenge after a few seconds and the real K&L content
+    // loads. "domcontentloaded" fires on the CHALLENGE page, not the real
+    // one — so we explicitly wait for the K&L-specific title/URL.
+    await page.waitForFunction(
+      () => !/Just a moment/i.test(document.title) && document.title.includes("K&L"),
+      { timeout: 45_000 },
+    ).catch(() => {
+      log("klwines", `${def.name}: Cloudflare challenge didn't resolve within 45s`);
+    });
     await humanDelay();
 
     const rowSelector =
@@ -236,7 +243,7 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
 
     for (let i = 0; i < maxPages; i++) {
       try {
-        await page.waitForSelector(rowSelector, { timeout: 20_000 });
+        await page.waitForSelector(rowSelector, { timeout: 30_000 });
       } catch {
         log("klwines", `${def.name} page ${i + 1}: no products rendered — stopping`);
         break;
@@ -410,6 +417,7 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
         qty: number;
         auctionEndAt?: string;
         lotDescription?: string;
+        description?: string;
         imageUrl?: string;
       };
       const out: Raw[] = [];
@@ -447,10 +455,17 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
         const qtyMatch = lotDescription?.match(/qty:\s*(\d+)/i);
         const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
 
+        // Marketing blurb / editorial description. On K&L this lives in
+        // div.tf-product-description and typically contains "Bid on this
+        // bottle of ..." plus any notes the buyer wrote. Load-bearing for
+        // LLM classify/extract — without it, the model only sees the title.
+        const descEl = card.querySelector("div.tf-product-description");
+        const description = descEl ? (descEl.textContent ?? "").replace(/\s+/g, " ").trim() : undefined;
+
         const imgEl = card.querySelector("div.tf-product-image img") as HTMLImageElement | null;
         const imageUrl = imgEl?.src ?? undefined;
 
-        out.push({ sku, title, url: href, priceUsd, qty, auctionEndAt, lotDescription, imageUrl });
+        out.push({ sku, title, url: href, priceUsd, qty, auctionEndAt, lotDescription, description, imageUrl });
       }
       return out;
     });
@@ -469,98 +484,36 @@ export class KlwinesAdapter implements IMarketplaceAdapter {
         vintage: vintageMatch ? vintageMatch[1] : undefined,
         auctionEndAt: r.auctionEndAt,
         lotDescription: r.lotDescription,
+        description: r.description,
         imageUrl: r.imageUrl,
       };
     });
   }
 
   async close(): Promise<void> {
-    if (this._browser) {
-      await this._browser.close().catch(() => {});
-      this._browser = null;
-    }
-    if (this._spawned) {
-      this._spawned.kill();
-      this._spawned = null;
-    }
+    // No-op — the shared browser stays connected across adapter lifetimes.
+    // Only the top-level scan runner closes it (via closeSharedBrowser()).
   }
 
   // ── internals ─────────────────────────────────────────────────────────
 
+  /**
+   * Get a page for scraping K&L. Prefers reusing an existing klwines tab
+   * in the shared Chrome (carries the logged-in cookies + bot-detection
+   * history). Falls back to opening a new tab in the same context, which
+   * still inherits the profile's cookies since the whole context shares
+   * one user-data-dir.
+   */
   private async _getPage(): Promise<Page> {
-    const browser = await this._getBrowser();
-    const contexts = browser.contexts();
-    const ctx = contexts[0];
-    if (!ctx) throw new Error("klwines: no browser context");
-
-    // Only reuse existing klwines tabs — never open a new one. Prefer a tab
-    // already on the New Product Feed; otherwise any klwines tab; otherwise
-    // the first tab at all (we'll navigate it). Opening fresh tabs trips
-    // K&L's bot detection.
+    const ctx = await getSharedContext();
     const klTabs = ctx.pages().filter((p) => p.url().includes("klwines.com"));
-    if (klTabs.length) {
-      const onFeed = klTabs.find((p) => /NewProductFeedYN|\/Products\?/.test(p.url()));
-      return onFeed ?? klTabs[0];
-    }
-    const any = ctx.pages()[0];
-    if (!any) throw new Error("klwines: no tab to drive — log in first");
-    return any;
-  }
-
-  private async _getBrowser(): Promise<Browser> {
-    if (this._browser) return this._browser;
-
-    if (!(await this._cdpAlive())) {
-      if (!this.autoSpawn) {
-        throw new Error(
-          `klwines: no Chrome on :${this.cdpPort} and autoSpawn=false`,
-        );
-      }
-      await this._spawnChrome();
-    }
-
-    this._browser = await chromium.connectOverCDP(
-      `http://127.0.0.1:${this.cdpPort}`,
-    );
-    return this._browser;
-  }
-
-  private async _cdpAlive(): Promise<boolean> {
-    try {
-      const res = await fetch(`http://127.0.0.1:${this.cdpPort}/json/version`);
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private async _spawnChrome(): Promise<void> {
-    mkdirSync(this.userDataDir, { recursive: true });
-    log(
-      "klwines",
-      `spawning Chrome with user-data-dir=${this.userDataDir} cdp=:${this.cdpPort}`,
-    );
-
-    this._spawned = spawn(
-      CHROME_PATH,
-      [
-        `--remote-debugging-port=${this.cdpPort}`,
-        `--user-data-dir=${this.userDataDir}`,
-        "--headless=new",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-features=OmniboxAimPopup,Aim,AimPrefetching",
-        "about:blank",
-      ],
-      { stdio: "ignore", detached: false },
-    );
-
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      if (await this._cdpAlive()) return;
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    throw new Error(`klwines: Chrome CDP never came up on :${this.cdpPort}`);
+    const page = klTabs.length
+      ? (klTabs.find((p) => /NewProductFeedYN|\/Products\?/.test(p.url())) ?? klTabs[0])
+      : await ctx.newPage();
+    // Pull the tab to the foreground so the headed Chrome visibly shows
+    // K&L's scraping progress alongside whatever other adapters are doing.
+    await page.bringToFront().catch(() => {});
+    return page;
   }
 }
 
@@ -596,6 +549,14 @@ function rowToListing(row: FeedRow): RawListing {
   // the two rows separate in the listings table.
   const listingId = row.kind === "auction" ? `au-${row.sku}` : `rt-${row.sku}`;
 
+  // Build the description the LLM will see. For auctions, combine the
+  // editorial blurb + lot contents; for new-product feed there's nothing
+  // extra beyond the title.
+  const descriptionParts = [row.description, row.lotDescription].filter(Boolean);
+  const description = descriptionParts.length
+    ? descriptionParts.join("\n")
+    : undefined;
+
   return makeRawListing({
     marketplace_id: "klwines",
     listing_id: listingId,
@@ -603,6 +564,7 @@ function rowToListing(row: FeedRow): RawListing {
     price_usd: row.priceUsd,
     shipping_usd: 0,
     url: row.url,
+    description,
     image_url: row.imageUrl,
     item_count: row.kind === "auction" ? row.qty : 1,
     end_time: row.auctionEndAt,

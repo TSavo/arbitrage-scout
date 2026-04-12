@@ -12,8 +12,29 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { marketplaces } from "@/db/schema";
-import type { IMarketplaceAdapter } from "../sources/IMarketplaceAdapter";
+import type {
+  IMarketplaceAdapter,
+  RawListing,
+} from "../sources/IMarketplaceAdapter";
 import { searchAsStream } from "../sources/IMarketplaceAdapter";
+
+/**
+ * Adapter's own queries run strictly serially — each adapter has limited
+ * browser/session resources, and firing every discovery query concurrently
+ * caused Playwright page.goto timeouts under load. Between adapters, the
+ * scan pipeline's merge() keeps parallelism.
+ */
+async function* serialQueryStream(
+  adapter: IMarketplaceAdapter,
+  queries: readonly string[],
+): AsyncIterable<RawListing> {
+  for (const q of queries) {
+    if (!adapter.isAvailable()) break;
+    for await (const listing of searchAsStream(adapter, q)) {
+      yield listing;
+    }
+  }
+}
 import { startScanLog, finishScanLog, buildLlm } from "./helpers";
 import { runPipeline } from "@/pipeline/stream/pipeline";
 import { merge } from "@/pipeline/stream/parallel";
@@ -34,6 +55,9 @@ function seedMarketplaces() {
     { id: "discogs", name: "Discogs", baseUrl: "https://www.discogs.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
     { id: "klwines", name: "K&L Wines", baseUrl: "https://www.klwines.com", supportsApi: false },
+    { id: "tcgplayer", name: "TCGPlayer", baseUrl: "https://www.tcgplayer.com", supportsApi: true },
+    { id: "liveauctioneers", name: "LiveAuctioneers", baseUrl: "https://www.liveauctioneers.com", supportsApi: true },
+    { id: "whatnot", name: "Whatnot", baseUrl: "https://www.whatnot.com", supportsApi: false },
   ];
   for (const mp of defaults) {
     const existing = db
@@ -93,6 +117,28 @@ export async function runScan(
     return 0;
   }
 
+  // Auto-seed any marketplace row missing for an active adapter. Prevents
+  // FK crashes when a new adapter is added before the seed list is updated.
+  for (const a of available) {
+    const existing = db
+      .select({ id: marketplaces.id })
+      .from(marketplaces)
+      .where(eq(marketplaces.id, a.marketplace_id))
+      .limit(1)
+      .all();
+    if (!existing.length) {
+      log("scan", `auto-seeding missing marketplace row: ${a.marketplace_id}`);
+      db.insert(marketplaces)
+        .values({
+          id: a.marketplace_id,
+          name: a.marketplace_id,
+          baseUrl: "",
+          supportsApi: false,
+        })
+        .run();
+    }
+  }
+
   // Record per-adapter scan log start.
   const scanLogIds = new Map<string, number>();
   for (const a of available) {
@@ -100,20 +146,47 @@ export async function runScan(
     section(`${a.marketplace_id.toUpperCase()} SCAN`);
   }
 
-  // Build one source stream per (adapter, query) and merge them all.
-  const sourceStreams: Array<AsyncIterable<any>> = [];
-  for (const a of available) {
+  // One stream per ADAPTER — within it, the adapter's discovery queries
+  // run serially (so each adapter only has one Playwright page / API call
+  // in flight at a time, avoiding thundering-herd browser launches).
+  //
+  // Ordering: K&L goes FIRST as a prefix stream so its listings enter the
+  // pipeline before other adapters' much-faster output floods the buffer
+  // and makes K&L's items wait behind thousands of non-K&L items.
+  // Everything else merges in concurrently AFTER K&L finishes.
+  const kl = available.find((a) => a.marketplace_id === "klwines");
+  const others = available.filter((a) => a.marketplace_id !== "klwines");
+  const buildStream = (a: IMarketplaceAdapter): AsyncIterable<RawListing> => {
     const queries = a.discoveryQueries();
     log("scan", `${a.marketplace_id}: ${queries.length} discovery queries`);
-    for (const q of queries) {
-      sourceStreams.push(searchAsStream(a, q));
+    return serialQueryStream(a, queries);
+  };
+  async function* prefixThenMerge(): AsyncIterable<RawListing> {
+    if (kl) {
+      log("scan", "running klwines FIRST (prefix stream)");
+      for await (const l of buildStream(kl)) yield l;
+      log("scan", "klwines complete — merging remaining adapters");
     }
+    const otherStreams = others.map(buildStream);
+    for await (const l of merge(...otherStreams)) yield l;
   }
-  const mergedSource = merge(...sourceStreams);
+  const mergedSource = prefixThenMerge();
+
+  // LLM stage concurrency = size of the provider pool. Each worker picks
+  // a free provider when it calls llmPool.generateJson, so N providers
+  // means N concurrent classify/extract operations.
+  const llmConcurrency =
+    llm && "size" in (llm as object) && typeof (llm as unknown as { size: unknown }).size === "number"
+      ? (llm as unknown as { size: number }).size
+      : 1;
+  if (llmConcurrency > 1) {
+    log("scan", `LLM pool size ${llmConcurrency} — stages scale accordingly`);
+  }
 
   const result = await runPipeline({
     source: mergedSource,
     llm: llm ?? undefined,
+    llmConcurrency,
     thresholds: {
       minProfitUsd: minProfit,
       minMarginPct: minMargin,

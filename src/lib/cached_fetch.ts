@@ -45,17 +45,33 @@ export interface CachedFetchOptions {
 // serialization — only real network calls need the lock.
 
 const mutexChains = new Map<string, Promise<void>>();
+
+/** Minimum wall-clock gap between consecutive calls for a given mutex key.
+ *  Enforces host-side rate limits by holding the lock past fn completion. */
+const MIN_GAP_MS: Record<string, number> = {
+  discogs: 1100, // 1 req/sec documented limit + 100ms buffer
+  // Free-tier OpenRouter caps at 16 req/min (observed via X-RateLimit-Limit),
+  // not the nominal 20. 4.5s gap = 13.3/min, safely under.
+  openrouter: 4500,
+};
+
 async function withMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = mutexChains.get(key) ?? Promise.resolve();
   let release!: () => void;
   const next = new Promise<void>((resolve) => { release = resolve; });
   mutexChains.set(key, prev.then(() => next));
+  const minGap = MIN_GAP_MS[key] ?? 0;
+  const t0 = Date.now();
   try {
     await prev;
     return await fn();
   } finally {
+    // Hold the lock for at least minGap total so the NEXT caller waits
+    // until the rate-limit window elapses.
+    const elapsed = Date.now() - t0;
+    const wait = minGap - elapsed;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     release();
-    // Reset if we're the last in the chain — prevents memory leak.
     if (mutexChains.get(key) === prev.then(() => next)) {
       mutexChains.delete(key);
     }
@@ -129,11 +145,11 @@ export async function cachedFetch(
   const maxRetries = Math.max(1, opts.maxRetries ?? 3);
   const tag = opts.cacheTag ?? "fetch";
 
-  // Auto-serialize Ollama calls. qwen3:8b (LLM) and qwen3-embedding:8b
-  // both ~8B parameters compete for GPU memory — parallel calls cause
-  // model-swap thrashing that stalls pipelines for minutes. One call at a
-  // time across the process prevents this.
-  const autoKey = isOllamaUrl(url) ? "ollama" : undefined;
+  // Auto-serialize calls to hosts that need single-flight treatment:
+  //   - Ollama: GPU model-swap thrash if LLM + embed run concurrently
+  //   - Discogs API: enforced 1 req/sec rate limit, 429s with retry spam
+  // Callers can override with an explicit serializeKey.
+  const autoKey = autoSerializeKey(url);
   const serializeKey = opts.serializeKey ?? autoKey;
 
   if (serializeKey) {
@@ -144,11 +160,16 @@ export async function cachedFetch(
   return doFetch(url, init, method, body, timeoutMs, maxRetries, tag, bypass, opts);
 }
 
-function isOllamaUrl(url: string): boolean {
-  // Any call to /api/generate, /api/embed, /api/chat, etc. on an Ollama
-  // host. Matches any port (default 11434 but configurable) so it catches
-  // localhost + battleaxe + any other deployment.
-  return /\/api\/(generate|embed|chat|tokenize|show)\b/.test(url);
+function autoSerializeKey(url: string): string | undefined {
+  // Ollama: any /api/<op> path on the local Ollama host. GPU serialization
+  // prevents model-swap thrash between LLM generate + embedding calls.
+  // NOTE: OpenRouter is also on a /v1/chat/completions path, so match the
+  // Ollama-specific set only.
+  if (/\/api\/(generate|embed|chat|tokenize|show)\b/.test(url) &&
+      !/openrouter\.ai/.test(url)) return "ollama";
+  // Discogs: hard 1 req/sec rate limit.
+  if (/\/\/(api\.)?discogs\.com\//i.test(url)) return "discogs";
+  return undefined;
 }
 
 async function doFetch(

@@ -10,6 +10,7 @@ import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
 import { cachedFetch } from "@/lib/cached_fetch";
+import { withSharedPage } from "@/lib/shared_browser";
 
 const GRAPHQL_URL = "https://hibid.com/graphql";
 const RATE_LIMIT_MS = 5000; // 1 req per 5 seconds
@@ -110,35 +111,31 @@ export class HiBidAdapter implements IMarketplaceAdapter {
 
     log("hibid", "initializing Playwright session for Cloudflare bypass");
     try {
-      const { chromium } = require("playwright");
-      const headed = process.env.HEADED === "1";
-      const browser = await chromium.launch({ headless: !headed });
-      const context = await browser.newContext();
-      const page = await context.newPage();
+      return await withSharedPage(async (page) => {
+        const context = page.context();
 
-      // Navigate to HiBid — Cloudflare will set cookies
-      await page.goto("https://hibid.com/search/lots?q=test", {
-        waitUntil: "networkidle",
-        timeout: 30000,
+        // Navigate to HiBid — Cloudflare will set cookies
+        await page.goto("https://hibid.com/search/lots?q=test", {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+
+        // Grab cookies and user agent
+        const allCookies = await context.cookies();
+        this.cookies = allCookies
+          .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
+          .join("; ");
+        this.userAgent = await page.evaluate(() => navigator.userAgent);
+
+        if (this.cookies) {
+          this.sessionReady = true;
+          log("hibid", `session ready (${allCookies.length} cookies)`);
+          return true;
+        }
+
+        error("hibid", "no cookies obtained from Playwright session");
+        return false;
       });
-
-      // Grab cookies and user agent
-      const allCookies = await context.cookies();
-      this.cookies = allCookies
-        .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
-        .join("; ");
-      this.userAgent = await page.evaluate(() => navigator.userAgent);
-
-      await browser.close();
-
-      if (this.cookies) {
-        this.sessionReady = true;
-        log("hibid", `session ready (${allCookies.length} cookies)`);
-        return true;
-      }
-
-      error("hibid", "no cookies obtained from Playwright session");
-      return false;
     } catch (err) {
       error("hibid", "Playwright session failed", err);
       return false;

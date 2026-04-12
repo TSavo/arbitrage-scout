@@ -32,6 +32,7 @@ import { processKnownProduct } from "@/pipeline/commands/process_known";
 import { processCachedListing } from "@/pipeline/commands/process_cached";
 import { taxonomyRepo } from "@/db/repos/TaxonomyRepo";
 import { log, error as logError } from "@/lib/logger";
+import { parallelMap } from "./parallel";
 import {
   type PipelineItem,
   withError,
@@ -43,6 +44,12 @@ export interface StageConfig {
   readonly llm?: LlmClient;
   readonly thresholds: OpportunityThresholds;
   readonly ollamaUrl: string;
+  /**
+   * How many LLM stage workers to run in parallel. Set to the size of the
+   * LLM provider pool — each worker picks a free provider, so N providers
+   * = N concurrent classify/extract operations.
+   */
+  readonly llmConcurrency?: number;
 }
 
 function wasFastPathed(item: PipelineItem): boolean {
@@ -165,55 +172,65 @@ export async function* fastPathStage(
   }
 }
 
-export async function* extractStage(
+export function extractStage(
   source: AsyncIterable<PipelineItem>,
   config: StageConfig,
 ): AsyncIterable<PipelineItem> {
-  for await (const item of source) {
-    if (item.error) { yield item; continue; }
-    if (wasFastPathed(item)) { yield withSkip(item, "extract"); continue; }
-    if (!item.validated) {
-      yield withError(item, "extract", new Error("not validated"));
-      continue;
-    }
-    yield await timed("extract", item, async () => {
-      try {
-        const extracted = await extractUnconstrained({
-          listing: item.validated!,
-          llmClient: config.llm,
-        });
-        return withStageResult(item, "extract", "extracted", extracted);
-      } catch (err) {
-        return withError(item, "extract", err);
-      }
-    });
-  }
+  // parallelMap with N workers — each worker calls llmPool.generateJson,
+  // which picks a free provider. N providers ⇒ N concurrent extracts.
+  return parallelMap(
+    source,
+    (item) => extractOne(item, config),
+    { concurrency: Math.max(1, config.llmConcurrency ?? 1) },
+  );
 }
 
-export async function* classifyStage(
+async function extractOne(item: PipelineItem, config: StageConfig): Promise<PipelineItem> {
+  if (item.error) return item;
+  if (wasFastPathed(item)) return withSkip(item, "extract");
+  if (!item.validated) return withError(item, "extract", new Error("not validated"));
+  return timed("extract", item, async () => {
+    try {
+      const extracted = await extractUnconstrained({
+        listing: item.validated!,
+        llmClient: config.llm,
+      });
+      return withStageResult(item, "extract", "extracted", extracted);
+    } catch (err) {
+      return withError(item, "extract", err);
+    }
+  });
+}
+
+export function classifyStage(
   source: AsyncIterable<PipelineItem>,
   config: StageConfig,
 ): AsyncIterable<PipelineItem> {
-  for await (const item of source) {
-    if (item.error) { yield item; continue; }
-    if (wasFastPathed(item)) { yield withSkip(item, "classify"); continue; }
-    if (!item.extracted || !item.validated) {
-      yield withError(item, "classify", new Error("missing prior stage output"));
-      continue;
-    }
-    yield await timed("classify", item, async () => {
-      try {
-        const classified = await classify({
-          listing: item.validated!,
-          extractedFields: item.extracted!.fields,
-          llmClient: config.llm,
-        });
-        return withStageResult(item, "classify", "classified", classified);
-      } catch (err) {
-        return withError(item, "classify", err);
-      }
-    });
+  return parallelMap(
+    source,
+    (item) => classifyOne(item, config),
+    { concurrency: Math.max(1, config.llmConcurrency ?? 1) },
+  );
+}
+
+async function classifyOne(item: PipelineItem, config: StageConfig): Promise<PipelineItem> {
+  if (item.error) return item;
+  if (wasFastPathed(item)) return withSkip(item, "classify");
+  if (!item.extracted || !item.validated) {
+    return withError(item, "classify", new Error("missing prior stage output"));
   }
+  return timed("classify", item, async () => {
+    try {
+      const classified = await classify({
+        listing: item.validated!,
+        extractedFields: item.extracted!.fields,
+        llmClient: config.llm,
+      });
+      return withStageResult(item, "classify", "classified", classified);
+    } catch (err) {
+      return withError(item, "classify", err);
+    }
+  });
 }
 
 /**

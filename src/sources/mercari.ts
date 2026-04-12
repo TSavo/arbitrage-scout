@@ -17,6 +17,7 @@ import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
 import { cachedFetch } from "@/lib/cached_fetch";
+import { withSharedPage } from "@/lib/shared_browser";
 
 const RATE_LIMIT_MS = 2500;
 const SESSION_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
@@ -42,7 +43,6 @@ export class MercariAdapter implements IMarketplaceAdapter {
   private lastCallAt = 0;
   private sessionReady = false;
   private sessionInitAt = 0;
-  private browser: any = null;
 
   discoveryQueries(): string[] {
     return [
@@ -82,18 +82,10 @@ export class MercariAdapter implements IMarketplaceAdapter {
 
     log("mercari", "initializing Playwright session for API interception");
     try {
-      const { chromium } = require("playwright");
-      // Try headless first (works if cookies are cached or no Cloudflare).
-      // Fall back to headed if HEADED=1 env is set (for interactive sessions).
-      const headed = process.env.HEADED === "1";
-      const browser = await chromium.launch({ headless: !headed });
-      const context = await browser.newContext({
-        userAgent:
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      });
-      const page = await context.newPage();
+      return await withSharedPage(async (page) => {
+        const context = page.context();
 
-      // Set up request interception to capture the search API call
+        // Set up request interception to capture the search API call
       let capturedRequest: CapturedSearchRequest | null = null;
 
       page.on("request", (req: { url: () => string; method: () => string; headers: () => Record<string, string>; postData: () => string | null }) => {
@@ -141,7 +133,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
       // Navigate to a search page to trigger the search API call
       log("mercari", "navigating to mercari.com/search");
       await page.goto("https://www.mercari.com/search/?keyword=nintendo+games", {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 45000,
       });
 
@@ -200,15 +192,13 @@ export class MercariAdapter implements IMarketplaceAdapter {
         });
 
         await page.goto("https://www.mercari.com/search/?keyword=pokemon+cards", {
-          waitUntil: "networkidle",
+          waitUntil: "domcontentloaded",
           timeout: 45000,
         });
 
         // Give it a few seconds
         await Promise.race([responsePromise, page.waitForTimeout(5000)]);
       }
-
-      await browser.close();
 
       if (capturedRequest) {
         this.captured = capturedRequest;
@@ -235,6 +225,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
 
       error("mercari", "no cookies or API endpoint obtained from Playwright session");
       return false;
+      });
     } catch (err) {
       error("mercari", "Playwright session failed", err);
       return false;
@@ -474,32 +465,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
     log("mercari", `HTML fallback: fetching ${searchUrl}`);
 
     try {
-      // Reuse the stored browser instance, or launch one if needed
-      if (!this.browser) {
-        const { chromium } = require("playwright");
-        this.browser = await chromium.launch({ headless: true });
-      }
-      const context = await this.browser.newContext({
-        userAgent: this.userAgent || undefined,
-      });
-
-      // Inject cookies if available
-      if (this.cookies) {
-        const cookiePairs = this.cookies.split("; ");
-        const cookieObjects = cookiePairs.map((pair: string) => {
-          const [name, ...valueParts] = pair.split("=");
-          return {
-            name: name.trim(),
-            value: valueParts.join("="),
-            domain: ".mercari.com",
-            path: "/",
-          };
-        });
-        await context.addCookies(cookieObjects);
-      }
-
-      const page = await context.newPage();
-
+      return await withSharedPage(async (page) => {
       // Collect API responses during page load for potential parsing
       let apiItems: Record<string, unknown>[] | null = null;
       page.on("response", async (resp: { url: () => string; status: () => number; text: () => Promise<string> }) => {
@@ -526,7 +492,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
       });
 
       await page.goto(searchUrl, {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 45000,
       });
 
@@ -534,7 +500,6 @@ export class MercariAdapter implements IMarketplaceAdapter {
 
       // If we intercepted API items during page load, use those
       if (apiItems && (apiItems as Record<string, unknown>[]).length > 0) {
-        await context.close();
         return this.parseApiResponse({ items: apiItems }, limit, options.max_price);
       }
 
@@ -564,7 +529,6 @@ export class MercariAdapter implements IMarketplaceAdapter {
 
       if (itemElements.length === 0) {
         log("mercari", "HTML fallback: no item elements found on page");
-        await context.close();
         return [];
       }
 
@@ -633,10 +597,9 @@ export class MercariAdapter implements IMarketplaceAdapter {
         }
       }
 
-      await context.close();
-
       log("mercari", `HTML fallback: parsed ${listings.length} listings`);
       return listings;
+      });
     } catch (err) {
       error("mercari", "HTML fallback search failed", err);
       return [];
@@ -672,14 +635,7 @@ export class MercariAdapter implements IMarketplaceAdapter {
   }
 
   async close(): Promise<void> {
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch {
-        // already closed
-      }
-      this.browser = null;
-    }
+    // Shared browser lifecycle managed externally; just reset session state.
     this.sessionReady = false;
   }
 

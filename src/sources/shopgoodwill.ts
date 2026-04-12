@@ -62,6 +62,9 @@ class ShopGoodwillSource {
   private _token: string | null = null;
   private readonly _username: string;
   private readonly _password: string;
+  /** Single-flight login — prevents thundering herd when parallel searches
+   *  start before the first call cached _token. */
+  private _loginInFlight: Promise<boolean> | null = null;
 
   constructor(cfg: ShopGoodwillConfig) {
     this._username = cfg.username;
@@ -69,6 +72,15 @@ class ShopGoodwillSource {
   }
 
   async login(): Promise<boolean> {
+    if (this._token) return true;
+    if (this._loginInFlight) return this._loginInFlight;
+    this._loginInFlight = this._doLogin().finally(() => {
+      this._loginInFlight = null;
+    });
+    return this._loginInFlight;
+  }
+
+  private async _doLogin(): Promise<boolean> {
     log("shopgoodwill", `logging in as ${this._username}`);
     const t0 = Date.now();
     try {

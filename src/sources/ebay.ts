@@ -64,13 +64,24 @@ export class EbayAdapter implements IMarketplaceAdapter {
   // OAuth
   // ------------------------------------------------------------
 
+  /** Single-flight token fetch. Multiple concurrent searches share one call. */
+  private _tokenInFlight: Promise<string> | null = null;
+
   private async _getToken(): Promise<string> {
     const now = Date.now();
     if (this._cachedToken && now < this._cachedToken.expires_at) {
-      log("ebay", "OAuth token cache HIT");
       return this._cachedToken.access_token;
     }
+    // If another caller is already fetching, piggy-back on their promise.
+    if (this._tokenInFlight) return this._tokenInFlight;
 
+    this._tokenInFlight = this._fetchToken().finally(() => {
+      this._tokenInFlight = null;
+    });
+    return this._tokenInFlight;
+  }
+
+  private async _fetchToken(): Promise<string> {
     log("ebay", `acquiring OAuth token from ${this._base}`);
     const t0 = Date.now();
     const creds = Buffer.from(`${this._appId}:${this._certId}`).toString("base64");
@@ -94,7 +105,7 @@ export class EbayAdapter implements IMarketplaceAdapter {
     const data = (await res.json()) as { access_token: string; expires_in: number };
     this._cachedToken = {
       access_token: data.access_token,
-      expires_at: now + TOKEN_TTL_MS,
+      expires_at: Date.now() + TOKEN_TTL_MS,
     };
     log("ebay", `OAuth token acquired expires_in=${data.expires_in}s elapsed=${Date.now() - t0}ms`);
     return data.access_token;

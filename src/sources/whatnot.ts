@@ -20,6 +20,7 @@ import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
 import { cachedFetch } from "@/lib/cached_fetch";
+import { withSharedPage } from "@/lib/shared_browser";
 
 const GRAPHQL_URL = "https://api.whatnot.com/graphql/";
 const RATE_LIMIT_MS = 2000;
@@ -107,13 +108,10 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
     this.sessionReady = false;
     this.session = null;
 
-    const headed = process.env.HEADED === "1";
-    log("whatnot", `initializing Playwright session (${headed ? "headed" : "headless"})`);
+    log("whatnot", `initializing Playwright session (shared headed Chrome)`);
     try {
-      const { chromium } = require("playwright");
-      const browser = await chromium.launch({ headless: !headed });
-      const context = await browser.newContext({ userAgent: USER_AGENT });
-      const page = await context.newPage();
+      return await withSharedPage(async (page) => {
+        const context = page.context();
 
       let authToken: string | null = null;
       let capturedSearch: CapturedGraphQLQuery | null = null;
@@ -176,7 +174,7 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
       // Navigate to search page to trigger GraphQL calls
       log("whatnot", "navigating to whatnot.com/search");
       await page.goto("https://www.whatnot.com/search?q=pokemon+cards", {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 45000,
       });
 
@@ -187,7 +185,7 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
       if (!capturedSearch) {
         log("whatnot", "no search query captured, trying category page");
         await page.goto("https://www.whatnot.com/category/pokemon-cards", {
-          waitUntil: "networkidle",
+          waitUntil: "domcontentloaded",
           timeout: 30000,
         });
         await page.waitForTimeout(3000);
@@ -199,8 +197,6 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
         .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
         .join("; ");
       const userAgent = await page.evaluate(() => navigator.userAgent);
-
-      await browser.close();
 
       this.session = {
         cookies,
@@ -221,6 +217,7 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
 
       error("whatnot", "no auth token or cookies obtained from Playwright session");
       return false;
+      });
     } catch (err) {
       error("whatnot", "Playwright session failed", err);
       return false;
@@ -395,31 +392,7 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
     log("whatnot", `HTML fallback: loading ${searchUrl}`);
 
     try {
-      const { chromium } = require("playwright");
-      const browser = await chromium.launch({ headless: true });
-      const context = await browser.newContext({ userAgent: USER_AGENT });
-
-      // Inject cookies from session if available
-      if (this.session?.cookies) {
-        const cookiePairs = this.session.cookies.split("; ");
-        const cookieObjects = cookiePairs
-          .filter((p: string) => p.includes("="))
-          .map((pair: string) => {
-            const [name, ...valueParts] = pair.split("=");
-            return {
-              name: name.trim(),
-              value: valueParts.join("="),
-              domain: ".whatnot.com",
-              path: "/",
-            };
-          });
-        if (cookieObjects.length > 0) {
-          await context.addCookies(cookieObjects);
-        }
-      }
-
-      const page = await context.newPage();
-
+      return await withSharedPage(async (page) => {
       // Collect GraphQL responses during page load
       // eslint-disable-next-line prefer-const
       let apiItems: Record<string, unknown>[] | null = null as Record<string, unknown>[] | null;
@@ -455,14 +428,13 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
       );
 
       await page.goto(searchUrl, {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 45000,
       });
       await page.waitForTimeout(3000);
 
       // If we intercepted API items, use those
       if (apiItems && apiItems.length > 0) {
-        await browser.close();
         return this.mapToListings(apiItems, limit, maxPrice);
       }
 
@@ -497,7 +469,6 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
 
       if (itemElements.length === 0) {
         log("whatnot", "HTML fallback: no item elements found on page");
-        await browser.close();
         return [];
       }
 
@@ -573,9 +544,9 @@ export class WhatnotAdapter implements IMarketplaceAdapter {
         }
       }
 
-      await browser.close();
       log("whatnot", `HTML fallback: parsed ${listings.length} listings`);
       return listings;
+      });
     } catch (err) {
       error("whatnot", "HTML fallback search failed", err);
       return [];

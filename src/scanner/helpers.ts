@@ -201,58 +201,45 @@ export function finishScanLog(
 
 // ── LLM factory ───────────────────────────────────────────────────────
 
-export interface LlmClient {
-  generateJson(prompt: string, opts?: { system?: string }): Promise<unknown>;
-}
+export { type LlmClient } from "@/llm/pool";
+import type { LlmClient } from "@/llm/pool";
+import {
+  LlmPool,
+  ollamaProvider,
+  openRouterProvider,
+  type LlmProviderConfig,
+} from "@/llm/pool";
 
 /**
- * Build an LLM client from the normalizer config section.
- * Returns null if provider is not "ollama".
+ * Build the LLM pool from the normalizer config. The pool aggregates
+ * every configured provider (Ollama + OpenRouter free models, etc.) and
+ * routes each call to the least-busy one. Concurrency = number of
+ * providers; the pipeline stages scale parallelMap accordingly.
  */
 export function buildLlm(normCfg: Record<string, unknown>): LlmClient | null {
   if (normCfg["provider"] !== "ollama") return null;
 
-  const baseUrl = (normCfg["base_url"] as string) ?? "http://battleaxe:11434";
-  const model = (normCfg["model"] as string) ?? "qwen3:8b";
-  const think = (normCfg["think"] as boolean) ?? false;
+  const providers: LlmProviderConfig[] = [
+    ollamaProvider({
+      baseUrl: (normCfg["base_url"] as string) ?? process.env.OLLAMA_URL,
+      model: (normCfg["model"] as string) ?? process.env.OLLAMA_MODEL,
+    }),
+  ];
 
-  // Use the existing functional client in src/llm/client.ts, wrapping it.
-  return {
-    async generateJson(prompt: string, opts?: { system?: string }): Promise<unknown> {
-      const body: Record<string, unknown> = {
-        model,
-        prompt,
-        stream: false,
-        think,
-        options: { temperature: 0 },
-      };
-      if (opts?.system) body["system"] = opts.system;
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    // Defaults are models that actually responded in testing: gpt-oss-120b
+    // (best reasoning), minimax-m2.5 (fast quality), gpt-oss-20b (smaller/
+    // faster fallback). Override with OPENROUTER_MODELS env.
+    const models = (process.env.OPENROUTER_MODELS ??
+      "openai/gpt-oss-120b:free,minimax/minimax-m2.5:free,openai/gpt-oss-20b:free")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean);
+    for (const m of models) {
+      providers.push(openRouterProvider({ apiKey: orKey, model: m }));
+    }
+  }
 
-      const res = await cachedFetch(
-        `${baseUrl.replace(/\/$/, "")}/api/generate`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-        { ttlMs: null, cacheTag: "llm" },
-      );
-
-      if (!res.ok) {
-        throw new Error(`Ollama HTTP ${res.status}: ${res.body.slice(0, 200)}`);
-      }
-
-      const data = res.json<{ response?: string }>();
-      const text = data.response;
-      if (typeof text !== "string") throw new Error("Unexpected Ollama response shape");
-
-      // Extract JSON from fenced or bare response
-      const trimmed = text.trim();
-      const fence = /```(?:json)?\s*([\s\S]+?)\s*```/i.exec(trimmed);
-      if (fence) return JSON.parse(fence[1].trim());
-      const obj = /(\{[\s\S]*\}|\[[\s\S]*\])/.exec(trimmed);
-      if (obj) return JSON.parse(obj[1]);
-      return JSON.parse(trimmed);
-    },
-  };
+  return new LlmPool(providers);
 }

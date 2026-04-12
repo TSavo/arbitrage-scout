@@ -46,6 +46,8 @@ next-env.d.ts
 config.yaml
 data/*.db
 data/*.db-*
+data/*.log
+data/scout-v2.db.backup-*
 
 
 # Playwright persistent sessions (contain auth cookies)

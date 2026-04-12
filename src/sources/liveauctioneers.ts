@@ -11,6 +11,7 @@ import { log, error } from "@/lib/logger";
 import type { IMarketplaceAdapter, RawListing } from "./IMarketplaceAdapter";
 import { makeRawListing } from "./IMarketplaceAdapter";
 import { cachedFetch } from "@/lib/cached_fetch";
+import { withSharedPage } from "@/lib/shared_browser";
 
 const RATE_LIMIT_MS = 2500;
 
@@ -45,54 +46,49 @@ export class LiveAuctioneersAdapter implements IMarketplaceAdapter {
 
     log("liveauctioneers", "initializing Playwright session to intercept search API");
     try {
-      const { chromium } = require("playwright");
-      const browser = await chromium.launch({ headless: true });
-      const context = await browser.newContext();
-      const page = await context.newPage();
+      return await withSharedPage(async (page) => {
+        let captured = false;
 
-      let captured = false;
+        // Intercept requests to find the search API
+        page.on("request", (req: { url: () => string; method: () => string; headers: () => Record<string, string>; postData: () => string | null }) => {
+          const url = req.url();
+          if (captured) return;
+          // Look for search-related API calls
+          if (
+            (url.includes("search") || url.includes("catalog") || url.includes("item")) &&
+            url.includes("liveauctioneers") &&
+            req.method() === "POST"
+          ) {
+            this.searchUrl = url;
+            this.searchHeaders = req.headers();
+            this.searchBody = req.postData() ?? "";
+            captured = true;
+            log("liveauctioneers", `captured search API: ${url}`);
+          }
+        });
 
-      // Intercept requests to find the search API
-      page.on("request", (req: { url: () => string; method: () => string; headers: () => Record<string, string>; postData: () => string | null }) => {
-        const url = req.url();
-        if (captured) return;
-        // Look for search-related API calls
-        if (
-          (url.includes("search") || url.includes("catalog") || url.includes("item")) &&
-          url.includes("liveauctioneers") &&
-          req.method() === "POST"
-        ) {
-          this.searchUrl = url;
-          this.searchHeaders = req.headers();
-          this.searchBody = req.postData() ?? "";
-          captured = true;
-          log("liveauctioneers", `captured search API: ${url}`);
+        await page.goto("https://www.liveauctioneers.com/search/?keyword=nintendo", {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+
+        // If we didn't capture a POST, try scrolling to trigger lazy load
+        if (!captured) {
+          await page.evaluate(() => window.scrollBy(0, 1000));
+          await page.waitForTimeout(3000);
         }
-      });
 
-      await page.goto("https://www.liveauctioneers.com/search/?keyword=nintendo", {
-        waitUntil: "networkidle",
-        timeout: 30000,
-      });
+        if (captured) {
+          this.sessionReady = true;
+          log("liveauctioneers", "session ready — search API captured");
+          return true;
+        }
 
-      // If we didn't capture a POST, try scrolling to trigger lazy load
-      if (!captured) {
-        await page.evaluate(() => window.scrollBy(0, 1000));
-        await page.waitForTimeout(3000);
-      }
-
-      await browser.close();
-
-      if (captured) {
+        // Fallback: try HTML scraping approach
+        log("liveauctioneers", "no API intercepted — will use HTML scraping");
         this.sessionReady = true;
-        log("liveauctioneers", "session ready — search API captured");
         return true;
-      }
-
-      // Fallback: try HTML scraping approach
-      log("liveauctioneers", "no API intercepted — will use HTML scraping");
-      this.sessionReady = true;
-      return true;
+      });
     } catch (err) {
       error("liveauctioneers", "Playwright session failed", err);
       return false;
@@ -180,69 +176,62 @@ export class LiveAuctioneersAdapter implements IMarketplaceAdapter {
     maxPrice?: number,
   ): Promise<RawListing[]> {
     log("liveauctioneers", `HTML scraping: "${query}"`);
-    let browser: any = null;
     try {
-      const { chromium } = require("playwright");
-      browser = await chromium.launch({ headless: true });
-      const page = await browser.newPage();
+      return await withSharedPage(async (page) => {
+        await page.goto(
+          `https://www.liveauctioneers.com/search/?keyword=${encodeURIComponent(query)}`,
+          { waitUntil: "domcontentloaded", timeout: 30000 },
+        );
 
-      await page.goto(
-        `https://www.liveauctioneers.com/search/?keyword=${encodeURIComponent(query)}`,
-        { waitUntil: "networkidle", timeout: 30000 },
-      );
+        // Extract items from the page
+        const scraped = await page.evaluate(() => {
+          const results: Array<{ title: string; price: string; url: string; image: string; id: string }> = [];
+          // Try multiple selector strategies
+          const cards = document.querySelectorAll('[class*="ItemCard"], [class*="item-card"], [data-testid*="item"], article');
+          for (const card of cards) {
+            const titleEl = card.querySelector('h3, h4, [class*="title"], [class*="Title"]');
+            const priceEl = card.querySelector('[class*="price"], [class*="Price"], [class*="bid"]');
+            const linkEl = card.querySelector('a[href*="/item/"]') as HTMLAnchorElement | null;
+            const imgEl = card.querySelector('img') as HTMLImageElement | null;
 
-      // Extract items from the page
-      const scraped = await page.evaluate(() => {
-        const results: Array<{ title: string; price: string; url: string; image: string; id: string }> = [];
-        // Try multiple selector strategies
-        const cards = document.querySelectorAll('[class*="ItemCard"], [class*="item-card"], [data-testid*="item"], article');
-        for (const card of cards) {
-          const titleEl = card.querySelector('h3, h4, [class*="title"], [class*="Title"]');
-          const priceEl = card.querySelector('[class*="price"], [class*="Price"], [class*="bid"]');
-          const linkEl = card.querySelector('a[href*="/item/"]') as HTMLAnchorElement | null;
-          const imgEl = card.querySelector('img') as HTMLImageElement | null;
-
-          if (titleEl && linkEl) {
-            results.push({
-              title: titleEl.textContent?.trim() ?? "",
-              price: priceEl?.textContent?.trim() ?? "0",
-              url: linkEl.href,
-              image: imgEl?.src ?? "",
-              id: linkEl.href.match(/\/item\/(\d+)/)?.[1] ?? "",
-            });
+            if (titleEl && linkEl) {
+              results.push({
+                title: titleEl.textContent?.trim() ?? "",
+                price: priceEl?.textContent?.trim() ?? "0",
+                url: linkEl.href,
+                image: imgEl?.src ?? "",
+                id: linkEl.href.match(/\/item\/(\d+)/)?.[1] ?? "",
+              });
+            }
           }
-        }
-        return results;
-      });
-
-      let listings = scraped
-        .filter((s: { title: string; id: string }) => s.title && s.id)
-        .slice(0, limit)
-        .map((s: { title: string; price: string; url: string; image: string; id: string }): RawListing => {
-          const price = parseFloat(s.price.replace(/[^0-9.]/g, "")) || 0;
-          return makeRawListing({
-            marketplace_id: "liveauctioneers",
-            listing_id: s.id,
-            title: s.title,
-            price_usd: price,
-            url: s.url,
-            image_url: s.image || undefined,
-          });
+          return results;
         });
 
-      if (maxPrice) {
-        listings = listings.filter((l: RawListing) => l.price_usd <= maxPrice);
-      }
+        let listings = scraped
+          .filter((s: { title: string; id: string }) => s.title && s.id)
+          .slice(0, limit)
+          .map((s: { title: string; price: string; url: string; image: string; id: string }): RawListing => {
+            const price = parseFloat(s.price.replace(/[^0-9.]/g, "")) || 0;
+            return makeRawListing({
+              marketplace_id: "liveauctioneers",
+              listing_id: s.id,
+              title: s.title,
+              price_usd: price,
+              url: s.url,
+              image_url: s.image || undefined,
+            });
+          });
 
-      log("liveauctioneers", `HTML scraped ${listings.length} items`);
-      return listings;
+        if (maxPrice) {
+          listings = listings.filter((l: RawListing) => l.price_usd <= maxPrice);
+        }
+
+        log("liveauctioneers", `HTML scraped ${listings.length} items`);
+        return listings;
+      });
     } catch (err) {
       error("liveauctioneers", `HTML scraping failed`, err);
       return [];
-    } finally {
-      if (browser) {
-        try { await browser.close(); } catch {}
-      }
     }
   }
 
