@@ -161,7 +161,14 @@ export class ShopifyAdapter implements IMarketplaceAdapter {
       const resp = await cachedFetch(
         url,
         { method: "GET" },
-        { ttlMs: 6 * 60 * 60_000, cacheTag: `${this.marketplace_id}:${query}` },
+        {
+          ttlMs: 6 * 60 * 60_000,
+          cacheTag: `${this.marketplace_id}:${query}`,
+          // Share the per-store mutex with fetchUpc so pagination and
+          // per-product fetches never race — Shopify rate-limits tightly
+          // when you fire concurrent requests at a host.
+          serializeKey: `shopify:${this.marketplace_id}`,
+        },
       );
       if (!resp.ok) {
         log(

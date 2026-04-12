@@ -56,13 +56,13 @@ const MIN_GAP_MS: Record<string, number> = {
   // Shopify-backed retailers have no published rate limit but start
   // throwing 429s when all 7 adapters hit products.json in parallel. 350ms
   // gap = ~170/min per host, well below the threshold we saw trigger 429s.
-  "shopify:bittersandbottles": 350,
-  "shopify:seelbachs": 350,
-  "shopify:shopsk": 350,
-  "shopify:woodencork": 350,
-  "shopify:caskcartel": 350,
-  "shopify:whiskybusiness": 350,
-  "shopify:flaviar": 350,
+  "shopify:bittersandbottles": 600,
+  "shopify:seelbachs": 600,
+  "shopify:shopsk": 600,
+  "shopify:woodencork": 600,
+  "shopify:caskcartel": 600,
+  "shopify:whiskybusiness": 600,
+  "shopify:flaviar": 600,
 };
 
 async function withMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
