@@ -105,9 +105,9 @@ async function main() {
     const stats = await productRepo.getPlatformStats();
     log("cli", `${stats.length} platforms computed in ${Date.now() - t0}ms`);
 
-    // Show top retro platforms by activity
+    // Show top retro platforms by activity (video game subtree).
     const top = stats
-      .filter((s: any) => s.productTypeId === "retro_game" && s.productCount >= 30)
+      .filter((s: any) => s.nodePath?.startsWith("/electronics/video_games") && s.productCount >= 30)
       .sort((a: any, b: any) => b.avgVolume - a.avgVolume)
       .slice(0, 15);
     section("TOP RETRO PLATFORMS BY ACTIVITY");
@@ -122,18 +122,13 @@ async function main() {
     const { verifyOpportunityUrls } = require("./scanner/verify");
     const result = await verifyOpportunityUrls();
     log("cli", `verified: ${result.checked} | valid: ${result.valid} | stale: ${result.stale} | errors: ${result.errors}`);
-  } else if (command === "seed-types") {
-    section("SEED-TYPES — Populating product_type_fields");
-    const { seedProductTypes } = require("./db/seed_product_types");
-    const result = await seedProductTypes();
-    log("cli", `seeded ${result.types} types, ${result.fields} fields, ${result.enumValues} enum values`);
   } else if (command === "seed-taxonomy") {
     section("SEED-TAXONOMY — Populating taxonomy_nodes");
     const { seedTaxonomy } = require("./db/seed_taxonomy");
     const result = await seedTaxonomy();
     log(
       "cli",
-      `seeded ${result.nodes} nodes, ${result.fields} fields, ${result.enumValues} enum values; linked ${result.productsLinked} products`,
+      `seeded ${result.nodes} nodes, ${result.fields} fields, ${result.enumValues} enum values`,
     );
   } else if (command === "seed-from-pricecharting") {
     section("SEED FROM PRICECHARTING — Deriving taxonomy from CSV data");
@@ -149,128 +144,8 @@ async function main() {
     const { reprocessStaleProducts } = require("./pipeline/reprocess");
     const n = await reprocessStaleProducts({ limit: 1000 });
     log("cli", `reprocessed ${n} products`);
-  } else if (command === "pipe") {
-    section("PIPE — Command pipeline (experimental)");
-    const { CommandPipeline } = require("./pipeline");
-    const { buildAdapters } = require("./sources/registry");
-    const { formatCurrency, formatPercent } = require("./pipeline/utils");
-    const { productTypeRepo } = require("./db/repos/ProductTypeRepo");
-
-    log("cli", "loading product type schema...");
-
-    const schema = await productTypeRepo.getAllSchemas();
-
-    log("cli", `loaded ${schema.length} product types`);
-
-    const pipeline = new CommandPipeline({
-      extractionBatchSize: 20,
-      minProfitUsd: 25,
-      minMarginPct: 0.30,
-      llmUrl: process.env.OLLAMA_URL || "http://battleaxe:11434",
-      llmModel: process.env.OLLAMA_MODEL || "qwen3:8b",
-    });
-
-    const emitter = pipeline.getEmitter();
-
-    emitter.on('command.issued', (event: any) => {
-      const prefix = event.type.padEnd(10);
-      log("pipe", `  [${prefix}] ${event.data.durationMs}ms`);
-    });
-
-    emitter.on('opportunity.found', (event: any) => {
-      log("pipe", `  + ${formatCurrency(event.data.profit)} (${formatPercent(event.data.margin)})`);
-    });
-
-    log("cli", "pipeline ready, loading adapters...");
-
-    const adapters = buildAdapters({
-      database: { path: "data/scout-v2.db" },
-      ebay: {
-        app_id: process.env.EBAY_APP_ID || "",
-        cert_id: process.env.EBAY_CERT_ID || "",
-      },
-      shopgoodwill: {
-        username: process.env.SGW_USERNAME || "",
-        password: process.env.SGW_PASSWORD || "",
-      },
-      pricecharting: {
-        api_key: process.env.PC_API_KEY || "",
-      },
-    });
-
-    log("cli", `loaded ${adapters.length} adapters`);
-    log("cli", "starting scan...");
-
-    let totalOpportunities = 0;
-    let totalListings = 0;
-
-    for (const adapter of adapters) {
-      if (!adapter.isAvailable()) {
-        log("pipe", `skipping ${adapter.marketplace_id} (unavailable)`);
-        continue;
-      }
-
-      section(`PIPE: ${adapter.marketplace_id}`);
-
-      const queries = adapter.discoveryQueries().slice(0, 3);
-      let adapterOpps = 0;
-      let adapterListings = 0;
-
-      for (const query of queries) {
-        log("pipe", `  searching: "${query}"`);
-        try {
-          const listings = await adapter.search(query, { limit: 10 });
-          log("cli", `  got ${listings.length} listings`);
-
-          for (const raw of listings) {
-            const normalized = {
-              marketplaceId: raw.marketplace_id,
-              listingId: raw.listing_id,
-              title: raw.title,
-              priceUsd: raw.price_usd,
-              shippingUsd: raw.shipping_usd ?? 0,
-              url: raw.url,
-              description: raw.description,
-              conditionRaw: raw.condition_raw,
-              categoryRaw: raw.category_raw,
-              imageUrl: raw.image_url,
-              seller: raw.seller,
-              numBids: raw.num_bids,
-              itemCount: raw.item_count,
-              endTime: raw.end_time,
-              extra: raw.extra,
-              scrapedAt: Date.now(),
-            };
-
-            try {
-              const result = await pipeline.processListing(normalized, schema);
-              if (result.opportunities.length > 0) {
-                totalOpportunities += result.opportunities.length;
-                adapterOpps += result.opportunities.length;
-              }
-              adapterListings++;
-            } catch (err) {
-              log("pipe", `  error: ${err}`);
-            }
-          }
-        } catch (err) {
-          log("pipe", `  search error: ${err}`);
-        }
-      }
-
-      totalListings += adapterListings;
-      log("cli", `${adapter.marketplace_id}: ${adapterListings} listings, ${adapterOpps} opportunities`);
-    }
-
-    const metrics = pipeline.getMetrics();
-    section("PIPE COMPLETE");
-    log("cli", `total listings: ${totalListings}`);
-    log("cli", `total opportunities: ${totalOpportunities}`);
-    log("cli", `total commands: ${metrics.commands.length}`);
-    log("cli", `total errors: ${metrics.totalErrors}`);
-    log("cli", `total time: ${(metrics.totalTimeMs / 1000).toFixed(1)}s`);
   } else {
-    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify|seed-types|seed-taxonomy|seed-from-pricecharting|reprocess|pipe]");
+    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify|seed-taxonomy|seed-from-pricecharting|reprocess]");
     process.exit(1);
   }
 }

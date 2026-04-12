@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { db } from "@/db/client";
-import { opportunities, products, pricePoints } from "@/db/schema";
+import { opportunities, products, pricePoints, taxonomyNodes } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { PortfolioClient, type PortfolioDeal, type CategoryBreakdown, type PortfolioSummary } from "./PortfolioClient";
 
@@ -23,10 +23,11 @@ export default async function PortfolioPage() {
       actualFeesUsd: opportunities.actualFeesUsd,
       productTitle: products.title,
       productPlatform: products.platform,
-      productTypeId: products.productTypeId,
+      taxonomyNodeLabel: taxonomyNodes.label,
     })
     .from(opportunities)
     .leftJoin(products, eq(opportunities.productId, products.id))
+    .leftJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
     .where(eq(opportunities.status, "purchased"))
     .orderBy(desc(opportunities.foundAt));
 
@@ -71,7 +72,7 @@ export default async function PortfolioPage() {
       productId: r.productId,
       productTitle: r.productTitle ?? "Unknown",
       productPlatform: r.productPlatform ?? "",
-      productTypeId: r.productTypeId ?? "unknown",
+      taxonomyNodeLabel: r.taxonomyNodeLabel ?? "unknown",
       buyPrice,
       currentMarketPrice,
       predictedProfit: r.profitUsd,
@@ -106,7 +107,7 @@ export default async function PortfolioPage() {
   // Category breakdown
   const categoryMap = new Map<string, { realized: number; unrealized: number }>();
   for (const d of deals) {
-    const cat = d.productTypeId;
+    const cat = d.taxonomyNodeLabel;
     const existing = categoryMap.get(cat) ?? { realized: 0, unrealized: 0 };
     if (d.isSold) {
       existing.realized += d.actualProfit ?? 0;
@@ -118,7 +119,7 @@ export default async function PortfolioPage() {
 
   const categoryBreakdown: CategoryBreakdown[] = Array.from(categoryMap.entries()).map(
     ([category, { realized, unrealized }]) => ({
-      category: category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      category,
       realized: Math.round(realized * 100) / 100,
       unrealized: Math.round(unrealized * 100) / 100,
     })

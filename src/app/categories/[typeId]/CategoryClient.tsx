@@ -64,15 +64,24 @@ type Stats = {
   avg_margin: number | null;
 };
 
-type ProductType = {
-  id: string;
-  name: string;
-  conditionSchema: string[];
-  metadataSchema: string[];
+type NodeInfo = {
+  id: number;
+  label: string;
+  slug: string;
+  pathCache: string;
+  description: string | null;
+};
+
+type Crumb = {
+  id: number;
+  label: string;
+  slug: string;
 };
 
 type Props = {
-  productType: ProductType;
+  node: NodeInfo;
+  breadcrumb: Crumb[];
+  isVideoGameBranch: boolean;
   stats: Stats;
   movers: Mover[];
   sparklineMap: Record<string, { value: number }[]>;
@@ -87,7 +96,9 @@ function fmtPct(n: number): string {
 }
 
 export default function CategoryClient({
-  productType,
+  node,
+  breadcrumb,
+  isVideoGameBranch,
   stats,
   movers,
   sparklineMap,
@@ -105,11 +116,46 @@ export default function CategoryClient({
         >
           &larr; Categories
         </Link>
+        {/* Breadcrumb path (root → ... → current node) */}
+        {breadcrumb.length > 1 && (
+          <nav className="flex flex-wrap items-center gap-1 mt-2 text-xs text-muted-foreground">
+            {breadcrumb.map((c, i) => {
+              const isLast = i === breadcrumb.length - 1;
+              const isRoot = i === 0;
+              return (
+                <span key={c.id} className="flex items-center gap-1">
+                  {i > 0 && <span className="opacity-50">/</span>}
+                  {isLast || isRoot ? (
+                    <span
+                      className={
+                        isLast ? "text-foreground font-medium" : undefined
+                      }
+                    >
+                      {c.label}
+                    </span>
+                  ) : (
+                    <Link
+                      href={`/categories/${c.id}`}
+                      className="hover:text-foreground transition-colors"
+                    >
+                      {c.label}
+                    </Link>
+                  )}
+                </span>
+              );
+            })}
+          </nav>
+        )}
         <h2 className="text-2xl font-semibold tracking-tight mt-2">
-          {productType.name}
+          {node.label}
         </h2>
         <p className="text-muted-foreground text-sm mt-0.5">
-          Deep dive into {productType.name.toLowerCase()} market data
+          {node.description
+            ? node.description
+            : `Deep dive into ${node.label.toLowerCase()} market data`}
+        </p>
+        <p className="text-[10px] font-mono text-muted-foreground mt-1">
+          {node.pathCache}
         </p>
       </div>
 
@@ -371,9 +417,7 @@ export default function CategoryClient({
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">
-              {productType.id === "retro_game"
-                ? "Top Platforms"
-                : "Top Sets / Platforms"}
+              {isVideoGameBranch ? "Top Platforms" : "Top Sets / Platforms"}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -381,7 +425,7 @@ export default function CategoryClient({
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-xs">
-                    {productType.id === "retro_game" ? "Platform" : "Set"}
+                    {isVideoGameBranch ? "Platform" : "Set"}
                   </TableHead>
                   <TableHead className="text-xs text-right">Products</TableHead>
                   <TableHead className="text-xs text-right">

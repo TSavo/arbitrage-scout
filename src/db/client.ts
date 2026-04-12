@@ -210,18 +210,51 @@ try {
   ).get();
   if (!marker) {
     log("db/client", "migrating: dropping product_type_id column + product_types tables");
-    sqlite.exec(`DROP INDEX IF EXISTS ix_products_type_volume`);
-    sqlite.exec(`DROP TABLE IF EXISTS products_fts`);
-    // SQLite ≥ 3.35 can DROP COLUMN directly.
-    try { sqlite.exec(`ALTER TABLE products DROP COLUMN product_type_id`); } catch (e) {
-      log("db/client", `DROP COLUMN product_type_id failed (continuing): ${e}`);
+    // FK check off for the structural surgery — product_types + its column
+    // are referenced from each other until both are gone. Re-enable after.
+    sqlite.pragma("foreign_keys = OFF");
+    try {
+      // SQLite's ALTER TABLE DROP COLUMN refuses when the column participates
+      // in a foreign key, even with foreign_keys=OFF. Rebuild the table via
+      // the canonical pattern: new table → copy data → drop old → rename.
+      sqlite.exec(`DROP INDEX IF EXISTS ix_products_type_volume`);
+      sqlite.exec(`DROP INDEX IF EXISTS ix_products_taxonomy_node`);
+      sqlite.exec(`DROP TABLE IF EXISTS products_fts`);
+      sqlite.exec(`
+        CREATE TABLE products_new (
+          id TEXT PRIMARY KEY,
+          taxonomy_node_id INTEGER,
+          extracted_schema_version INTEGER,
+          title TEXT NOT NULL,
+          platform TEXT,
+          release_date TEXT,
+          genre TEXT,
+          sales_volume INTEGER NOT NULL DEFAULT 0,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+      sqlite.exec(`
+        INSERT INTO products_new
+          (id, taxonomy_node_id, extracted_schema_version, title, platform,
+           release_date, genre, sales_volume, metadata, created_at, updated_at)
+        SELECT id, taxonomy_node_id, extracted_schema_version, title, platform,
+           release_date, genre, sales_volume, metadata, created_at, updated_at
+        FROM products
+      `);
+      sqlite.exec(`DROP TABLE products`);
+      sqlite.exec(`ALTER TABLE products_new RENAME TO products`);
+      sqlite.exec(`CREATE INDEX ix_products_taxonomy_node ON products(taxonomy_node_id)`);
+      sqlite.exec(`DROP TABLE IF EXISTS product_type_field_enum_values`);
+      sqlite.exec(`DROP TABLE IF EXISTS product_type_fields`);
+      sqlite.exec(`DROP TABLE IF EXISTS product_types`);
+      sqlite.exec(`CREATE TABLE _migrated_drop_product_types (applied_at TEXT NOT NULL)`);
+      sqlite.prepare(`INSERT INTO _migrated_drop_product_types VALUES (?)`).run(new Date().toISOString());
+      log("db/client", "migration complete");
+    } finally {
+      sqlite.pragma("foreign_keys = ON");
     }
-    sqlite.exec(`DROP TABLE IF EXISTS product_type_field_enum_values`);
-    sqlite.exec(`DROP TABLE IF EXISTS product_type_fields`);
-    sqlite.exec(`DROP TABLE IF EXISTS product_types`);
-    sqlite.exec(`CREATE TABLE _migrated_drop_product_types (applied_at TEXT NOT NULL)`);
-    sqlite.prepare(`INSERT INTO _migrated_drop_product_types VALUES (?)`).run(new Date().toISOString());
-    log("db/client", "migration complete");
   }
 } catch (err) {
   log("db/client", `product_types migration error: ${err}`);

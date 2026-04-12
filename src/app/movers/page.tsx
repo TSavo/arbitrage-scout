@@ -12,7 +12,7 @@ type MoverRow = {
   change_usd: number;
   title: string;
   platform: string | null;
-  product_type_id: string;
+  taxonomyNodeLabel: string | null;
 };
 
 type SparklineRow = {
@@ -52,10 +52,11 @@ export default async function MoversPage(props: {
       ROUND(w2.price_usd - w1.price_usd, 2) as change_usd,
       p.title,
       p.platform,
-      p.product_type_id
+      t.label as taxonomyNodeLabel
     FROM windowed w1
     JOIN windowed w2 ON w1.product_id = w2.product_id AND w1.condition = w2.condition
     JOIN products p ON p.id = w1.product_id
+    LEFT JOIN taxonomy_nodes t ON t.id = p.taxonomy_node_id
     WHERE w1.rn_first = 1 AND w2.rn_last = 1
       AND w1.price_usd >= 5
       AND ABS(w2.price_usd - w1.price_usd) >= 2

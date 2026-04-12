@@ -17,7 +17,9 @@ type ProductRow = {
   id: string;
   title: string;
   platform: string | null;
-  productTypeId: string;
+  taxonomyNodeId: number | null;
+  taxonomyLabel: string | null;
+  taxonomyPath: string | null;
   salesVolume: number;
   createdAt: string;
   prices: Record<string, number>;
@@ -34,7 +36,13 @@ function fmt(n: number | undefined) {
   }).format(n);
 }
 
-export function ProductsClient({ rows }: { rows: ProductRow[] }) {
+export function ProductsClient({
+  rows,
+  activeNodeId,
+}: {
+  rows: ProductRow[];
+  activeNodeId?: number | null;
+}) {
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState<"title" | "volume">("volume");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -48,7 +56,8 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
     .filter((r) =>
       search === "" ||
       r.title.toLowerCase().includes(search.toLowerCase()) ||
-      (r.platform ?? "").toLowerCase().includes(search.toLowerCase())
+      (r.platform ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (r.taxonomyLabel ?? "").toLowerCase().includes(search.toLowerCase())
     )
     .sort((a, b) => {
       const dir = sortDir === "asc" ? 1 : -1;
@@ -64,7 +73,7 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
       <div className="flex items-center gap-3">
         <input
           type="search"
-          placeholder="Search title or platform…"
+          placeholder="Search title, platform, or category…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="text-sm bg-card border border-border rounded px-3 py-1.5 text-foreground placeholder:text-muted-foreground w-72 focus:outline-none focus:ring-1 focus:ring-ring"
@@ -72,6 +81,14 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
         <span className="text-xs text-muted-foreground">
           {filtered.length} of {rows.length}
         </span>
+        {activeNodeId != null && (
+          <Link
+            href="/products"
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+          >
+            clear node filter
+          </Link>
+        )}
       </div>
 
       <div className="rounded-md border border-border overflow-hidden">
@@ -85,7 +102,7 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
                 Title{sortIcon("title")}
               </TableHead>
               <TableHead className="text-xs">Platform</TableHead>
-              <TableHead className="text-xs">Type</TableHead>
+              <TableHead className="text-xs">Category</TableHead>
               <TableHead className="text-xs text-right">Loose</TableHead>
               <TableHead className="text-xs text-right">CIB</TableHead>
               <TableHead className="text-xs text-right">New</TableHead>
@@ -129,9 +146,17 @@ export function ProductsClient({ rows }: { rows: ProductRow[] }) {
                   )}
                 </TableCell>
                 <TableCell>
-                  <span className="text-xs text-muted-foreground font-mono">
-                    {row.productTypeId}
-                  </span>
+                  {row.taxonomyNodeId != null && row.taxonomyLabel ? (
+                    <Link
+                      href={`/categories/${row.taxonomyNodeId}`}
+                      className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      title={row.taxonomyPath ?? undefined}
+                    >
+                      {row.taxonomyLabel}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm">
                   {fmt(row.prices["loose"])}

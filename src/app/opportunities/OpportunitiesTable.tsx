@@ -30,7 +30,7 @@ export type PriceComparison = {
 export type OpportunityRow = {
   id: number;
   productId: string;
-  productTypeId: string;
+  taxonomyNodeLabel: string;
   listingTitle: string;
   productTitle: string;
   productPlatform: string;
@@ -119,7 +119,7 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
   const [pending, startTransition] = useTransition();
 
   const allMarketplaces = [...new Set(rows.map((r) => r.marketplaceName))].sort();
-  const allCategories = [...new Set(rows.map((r) => r.productTypeId))].sort();
+  const allCategories = [...new Set(rows.map((r) => r.taxonomyNodeLabel))].sort();
 
   function handleSort(col: typeof sortCol) {
     if (col === sortCol) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -141,7 +141,7 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
     .filter((r) => filterStatus === "all" || r.status === filterStatus)
     .filter((r) => r.profitUsd >= minProfit)
     .filter((r) => filterMarketplace === "all" || r.marketplaceName === filterMarketplace)
-    .filter((r) => filterCategory === "all" || r.productTypeId === filterCategory)
+    .filter((r) => filterCategory === "all" || r.taxonomyNodeLabel === filterCategory)
     .filter((r) => minMargin === 0 || r.marginPct * 100 >= minMargin)
     .filter((r) => filterLot === "all" || (filterLot === "lot" ? r.isLot : !r.isLot))
     .sort((a, b) => {

@@ -8,6 +8,7 @@ import {
   marketplaces,
   products,
   pricePoints,
+  taxonomyNodes,
 } from "@/db/schema";
 import { desc, eq, and } from "drizzle-orm";
 import { OpportunitiesTable, type OpportunityRow, type LotItem, type PriceComparison } from "./OpportunitiesTable";
@@ -39,12 +40,13 @@ export default async function OpportunitiesPage() {
       marketplaceName: marketplaces.name,
       productTitle: products.title,
       productPlatform: products.platform,
-      productTypeId: products.productTypeId,
+      taxonomyNodeLabel: taxonomyNodes.label,
     })
     .from(opportunities)
     .innerJoin(listings, eq(opportunities.listingId, listings.id))
     .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
     .leftJoin(products, eq(opportunities.productId, products.id))
+    .leftJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
     .orderBy(desc(opportunities.foundAt))
     .limit(500);
 
@@ -109,7 +111,7 @@ export default async function OpportunitiesPage() {
   const tableRows: OpportunityRow[] = fullRows.map((r) => ({
     id: r.id,
     productId: r.productId,
-    productTypeId: r.productTypeId ?? "unknown",
+    taxonomyNodeLabel: r.taxonomyNodeLabel ?? "unknown",
     listingTitle: r.listingTitle,
     productTitle: r.productTitle ?? r.listingTitle,
     productPlatform: r.productPlatform ?? "",

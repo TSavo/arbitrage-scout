@@ -1,12 +1,11 @@
 export const dynamic = "force-dynamic";
 
-import { db, sqlite } from "@/db/client";
-import { products, productTypes, pricePoints, productIdentifiers, opportunities, listings, listingItems } from "@/db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { db } from "@/db/client";
+import { products, taxonomyNodes, pricePoints, productIdentifiers, opportunities, listings, listingItems } from "@/db/schema";
+import { eq, desc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
 import { ProductPriceChart } from "./ProductPriceChart";
 
@@ -15,21 +14,20 @@ export default async function ProductDetailPage(
 ) {
   const { id } = await props.params;
 
-  // Fetch product
-  const product = db
-    .select()
+  // Fetch product joined to its taxonomy node (single query, no N+1).
+  const productRow = db
+    .select({
+      product: products,
+      node: taxonomyNodes,
+    })
     .from(products)
+    .leftJoin(taxonomyNodes, eq(taxonomyNodes.id, products.taxonomyNodeId))
     .where(eq(products.id, id))
     .get();
 
-  if (!product) notFound();
-
-  // Fetch product type
-  const productType = db
-    .select()
-    .from(productTypes)
-    .where(eq(productTypes.id, product.productTypeId))
-    .get();
+  if (!productRow) notFound();
+  const product = productRow.product;
+  const node = productRow.node;
 
   // Fetch identifiers
   const identifiers = db
@@ -124,9 +122,26 @@ export default async function ProductDetailPage(
           {product.platform && (
             <Badge variant="outline">{product.platform}</Badge>
           )}
-          <Badge variant="secondary" className="text-xs font-mono">
-            {product.productTypeId}
-          </Badge>
+          {node ? (
+            <Link
+              href={`/categories/${node.id}`}
+              className="hover:underline"
+              title={node.pathCache}
+            >
+              <Badge variant="secondary" className="text-xs">
+                {node.label}
+              </Badge>
+            </Link>
+          ) : (
+            <Badge variant="secondary" className="text-xs font-mono">
+              uncategorized
+            </Badge>
+          )}
+          {node && (
+            <span className="text-[10px] font-mono text-muted-foreground">
+              {node.pathCache}
+            </span>
+          )}
           {product.salesVolume > 0 && (
             <span className="text-xs text-muted-foreground">
               {product.salesVolume.toLocaleString()} sales/yr

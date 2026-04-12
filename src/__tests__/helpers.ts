@@ -14,56 +14,8 @@ export function createTestDb() {
 
   // Create all tables
   sqlite.exec(`
-    CREATE TABLE product_types (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      condition_schema TEXT NOT NULL DEFAULT '[]',
-      metadata_schema TEXT NOT NULL DEFAULT '[]'
-    )
-  `);
-
-  sqlite.exec(`
-    CREATE TABLE product_type_fields (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_type_id TEXT NOT NULL REFERENCES product_types(id),
-      key TEXT NOT NULL,
-      label TEXT NOT NULL,
-      data_type TEXT NOT NULL,
-      pattern TEXT,
-      min_value REAL,
-      max_value REAL,
-      is_integer INTEGER NOT NULL DEFAULT 0,
-      format TEXT,
-      unit TEXT,
-      extract_hint TEXT,
-      is_required INTEGER NOT NULL DEFAULT 0,
-      is_searchable INTEGER NOT NULL DEFAULT 0,
-      search_weight REAL NOT NULL DEFAULT 1.0,
-      is_identifier INTEGER NOT NULL DEFAULT 0,
-      is_pricing_axis INTEGER NOT NULL DEFAULT 0,
-      display_priority INTEGER NOT NULL DEFAULT 100,
-      is_hidden INTEGER NOT NULL DEFAULT 0,
-      UNIQUE(product_type_id, key)
-    )
-  `);
-
-  sqlite.exec(`
-    CREATE TABLE product_type_field_enum_values (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      field_id INTEGER NOT NULL REFERENCES product_type_fields(id) ON DELETE CASCADE,
-      value TEXT NOT NULL,
-      label TEXT NOT NULL,
-      description TEXT,
-      display_order INTEGER NOT NULL DEFAULT 100,
-      UNIQUE(field_id, value)
-    )
-  `);
-
-  sqlite.exec(`
     CREATE TABLE products (
       id TEXT PRIMARY KEY,
-      product_type_id TEXT NOT NULL REFERENCES product_types(id),
       taxonomy_node_id INTEGER,
       extracted_schema_version INTEGER,
       title TEXT NOT NULL,

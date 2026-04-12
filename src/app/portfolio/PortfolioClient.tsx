@@ -21,7 +21,7 @@ export type PortfolioDeal = {
   productId: string;
   productTitle: string;
   productPlatform: string;
-  productTypeId: string;
+  taxonomyNodeLabel: string;
   buyPrice: number;
   currentMarketPrice: number;
   predictedProfit: number;

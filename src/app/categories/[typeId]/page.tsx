@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 
 import { db } from "@/db/client";
-import { productTypes } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import { taxonomyRepo } from "@/db/repos/TaxonomyRepo";
 import CategoryClient from "./CategoryClient";
 
 type MoverRow = {
@@ -52,19 +52,28 @@ type StatsRow = {
   avg_margin: number | null;
 };
 
+// Route param `[typeId]` now carries the integer taxonomy node id.
 export default async function CategoryPage(
   props: PageProps<"/categories/[typeId]">
 ) {
   const { typeId } = await props.params;
+  const nodeId = Number(typeId);
+  if (!Number.isFinite(nodeId) || !Number.isInteger(nodeId)) notFound();
 
-  // Fetch product type
-  const productType = db
-    .select()
-    .from(productTypes)
-    .where(eq(productTypes.id, typeId))
-    .get();
+  const node = await taxonomyRepo.getNode(nodeId);
+  if (!node) notFound();
 
-  if (!productType) notFound();
+  // Ancestor chain for breadcrumb (root → ... → node).
+  const breadcrumb = (await taxonomyRepo.getPath(node.id)).map((n) => ({
+    id: n.id,
+    label: n.label,
+    slug: n.slug,
+  }));
+
+  // Subtree match: product's taxonomy_node_id must resolve to a taxonomy_node
+  // whose path_cache starts with this node's path_cache (self + descendants).
+  const pathPrefix = node.pathCache;
+  const subtreeLike = `${pathPrefix}/%`;
 
   // Stats
   let stats: StatsRow = {
@@ -87,9 +96,10 @@ export default async function CategoryPage(
         COUNT(DISTINCT CASE WHEN o.status = 'new' THEN o.id END) as total_opportunities,
         ROUND(AVG(CASE WHEN o.status = 'new' THEN o.margin_pct END), 3) as avg_margin
       FROM products p
+      JOIN taxonomy_nodes tn ON tn.id = p.taxonomy_node_id
       LEFT JOIN price_points pp ON pp.product_id = p.id
       LEFT JOIN opportunities o ON o.product_id = p.id
-      WHERE p.product_type_id = ${typeId}
+      WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
     `) as StatsRow | undefined;
     if (row) stats = row;
   } catch {
@@ -106,7 +116,8 @@ export default async function CategoryPage(
           FIRST_VALUE(pp.price_usd) OVER (PARTITION BY pp.product_id ORDER BY pp.recorded_at DESC) as last_price
         FROM price_points pp
         JOIN products p ON p.id = pp.product_id
-        WHERE p.product_type_id = ${typeId}
+        JOIN taxonomy_nodes tn ON tn.id = p.taxonomy_node_id
+        WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
           AND pp.condition = 'loose'
           AND pp.price_usd > 0
           AND pp.recorded_at >= date('now', '-30 days')
@@ -168,10 +179,11 @@ export default async function CategoryPage(
         l.url
       FROM opportunities o
       JOIN products p ON p.id = o.product_id
+      JOIN taxonomy_nodes tn ON tn.id = p.taxonomy_node_id
       JOIN listings l ON l.id = o.listing_id
       JOIN marketplaces m ON m.id = l.marketplace_id
       WHERE o.status = 'new'
-        AND p.product_type_id = ${typeId}
+        AND (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
       ORDER BY o.margin_pct DESC
       LIMIT 15
     `) as DealRow[];
@@ -196,7 +208,8 @@ export default async function CategoryPage(
         COUNT(DISTINCT pp.product_id) as count
       FROM price_points pp
       JOIN products p ON p.id = pp.product_id
-      WHERE p.product_type_id = ${typeId}
+      JOIN taxonomy_nodes tn ON tn.id = p.taxonomy_node_id
+      WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
         AND pp.condition = 'loose'
         AND pp.recorded_at = (SELECT MAX(recorded_at) FROM price_points WHERE product_id = pp.product_id AND condition = 'loose')
       GROUP BY bucket
@@ -232,8 +245,9 @@ export default async function CategoryPage(
         ) THEN pp.price_usd END), 2) as avg_price,
         ROUND(AVG(p.sales_volume), 0) as avg_volume
       FROM products p
+      JOIN taxonomy_nodes tn ON tn.id = p.taxonomy_node_id
       LEFT JOIN price_points pp ON pp.product_id = p.id
-      WHERE p.product_type_id = ${typeId}
+      WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
         AND p.platform IS NOT NULL
       GROUP BY p.platform
       HAVING COUNT(DISTINCT p.id) >= 5
@@ -244,9 +258,21 @@ export default async function CategoryPage(
     // ok
   }
 
+  // Heuristic: video-game-like nodes want "Top Platforms" label, others use
+  // "Top Sets / Platforms". Replaces the old hardcoded `retro_game` check.
+  const isVideoGameBranch = node.pathCache.startsWith("/electronics/video_games");
+
   return (
     <CategoryClient
-      productType={productType}
+      node={{
+        id: node.id,
+        label: node.label,
+        slug: node.slug,
+        pathCache: node.pathCache,
+        description: node.description ?? null,
+      }}
+      breadcrumb={breadcrumb}
+      isVideoGameBranch={isVideoGameBranch}
       stats={stats}
       movers={movers}
       sparklineMap={sparklineMap}

@@ -21,7 +21,7 @@ type Mover = {
   change_usd: number;
   title: string;
   platform: string | null;
-  product_type_id: string;
+  taxonomyNodeLabel: string | null;
 };
 
 type Props = {
@@ -88,11 +88,18 @@ function MoverTable({
               </Link>
             </TableCell>
             <TableCell>
-              {m.platform && (
-                <Badge variant="secondary" className="text-[10px]">
-                  {m.platform}
-                </Badge>
-              )}
+              <div className="flex flex-col gap-0.5">
+                {m.platform && (
+                  <Badge variant="secondary" className="text-[10px] w-fit">
+                    {m.platform}
+                  </Badge>
+                )}
+                {m.taxonomyNodeLabel && (
+                  <span className="text-[10px] text-muted-foreground">
+                    {m.taxonomyNodeLabel}
+                  </span>
+                )}
+              </div>
             </TableCell>
             <TableCell className="text-center">
               <div className="flex justify-center">

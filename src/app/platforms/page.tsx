@@ -1,53 +1,46 @@
 export const dynamic = "force-dynamic";
 
-import { db } from "@/db/client";
-import { sql } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { profilePlatforms, type PlatformProfile } from "@/scanner/platforms";
 
 function fmt(n: number) {
   return `$${n.toFixed(0)}`;
 }
 
-type PlatformStat = {
-  platform: string;
-  product_type_id: string;
-  product_count: number;
-  avg_loose: number;
-  avg_cib: number;
-  cib_to_loose_ratio: number;
-  total_volume: number;
-  avg_volume: number;
-  pct_above_50: number;
-  pct_above_100: number;
-};
+function shortPath(path: string): string {
+  const segs = path.split("/").filter(Boolean);
+  return segs[segs.length - 1] ?? path;
+}
 
 export default async function PlatformsPage() {
-  // Read from cached platform_stats table
-  let platforms: PlatformStat[] = [];
+  let platforms: PlatformProfile[] = [];
   try {
-    platforms = db.all(sql`
-      SELECT * FROM platform_stats WHERE product_count >= 30 ORDER BY avg_volume DESC
-    `) as PlatformStat[];
+    platforms = profilePlatforms({ minProducts: 30 });
   } catch {
-    // Table might not exist yet
+    // Tables might not exist yet
   }
 
-  const retro = platforms.filter((p) => p.product_type_id === "retro_game");
-  const cards = platforms.filter((p) => p.product_type_id !== "retro_game");
+  const retro = platforms.filter((p) =>
+    p.taxonomyPath.startsWith("/electronics/video_games"),
+  );
+  const cards = platforms.filter(
+    (p) => !p.taxonomyPath.startsWith("/electronics/video_games"),
+  );
+  void cards;
 
   // Undervalued score: high volume + low price + high CIB ratio
-  const maxVol = Math.max(...retro.map((p) => p.avg_volume), 1);
-  const maxPrice = Math.max(...retro.map((p) => p.avg_loose), 1);
+  const maxVol = Math.max(...retro.map((p) => p.avgVolume), 1);
+  const maxPrice = Math.max(...retro.map((p) => p.avgLoose), 1);
   const scored = retro.map((p) => ({
     ...p,
     score:
-      (p.avg_volume / maxVol) * 0.4 +
-      (1 - p.avg_loose / maxPrice) * 0.3 +
-      Math.min((p.cib_to_loose_ratio || 0) / 5, 1) * 0.3,
+      (p.avgVolume / maxVol) * 0.4 +
+      (1 - p.avgLoose / maxPrice) * 0.3 +
+      Math.min((p.cibToLooseRatio || 0) / 5, 1) * 0.3,
   }));
 
   return (
@@ -81,22 +74,25 @@ export default async function PlatformsPage() {
                         {(p.score * 100).toFixed(0)}
                       </Badge>
                     </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {shortPath(p.taxonomyPath)}
+                    </div>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                       <div>
                         <span className="text-muted-foreground">Avg loose</span>
-                        <p className="font-mono">{fmt(p.avg_loose)}</p>
+                        <p className="font-mono">{fmt(p.avgLoose)}</p>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Games</span>
-                        <p className="font-mono">{p.product_count}</p>
+                        <p className="font-mono">{p.productCount}</p>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Volume</span>
-                        <p className="font-mono">{Math.round(p.avg_volume)}/yr</p>
+                        <p className="font-mono">{Math.round(p.avgVolume)}/yr</p>
                       </div>
                       <div>
                         <span className="text-muted-foreground">&gt;$50</span>
-                        <p className="font-mono">{p.pct_above_50.toFixed(0)}%</p>
+                        <p className="font-mono">{p.pctAbove50.toFixed(0)}%</p>
                       </div>
                     </div>
                   </CardContent>
@@ -116,6 +112,7 @@ export default async function PlatformsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="text-xs">Platform</TableHead>
+                <TableHead className="text-xs">Taxonomy</TableHead>
                 <TableHead className="text-xs text-right">Games</TableHead>
                 <TableHead className="text-xs text-right">Avg Loose</TableHead>
                 <TableHead className="text-xs text-right">Avg CIB</TableHead>
@@ -129,22 +126,25 @@ export default async function PlatformsPage() {
               {retro.map((p) => (
                 <TableRow key={p.platform}>
                   <TableCell className="text-sm font-medium">{p.platform}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">{p.product_count}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">{fmt(p.avg_loose)}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {shortPath(p.taxonomyPath)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-sm">{p.productCount}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{fmt(p.avgLoose)}</TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {p.avg_cib ? fmt(p.avg_cib) : "—"}
+                    {p.avgCib ? fmt(p.avgCib) : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {p.cib_to_loose_ratio ? `${p.cib_to_loose_ratio.toFixed(1)}x` : "—"}
+                    {p.cibToLooseRatio ? `${p.cibToLooseRatio.toFixed(1)}x` : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {Math.round(p.avg_volume)}
+                    {Math.round(p.avgVolume)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {p.pct_above_50.toFixed(0)}%
+                    {p.pctAbove50.toFixed(0)}%
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {p.pct_above_100.toFixed(0)}%
+                    {p.pctAbove100.toFixed(0)}%
                   </TableCell>
                 </TableRow>
               ))}
