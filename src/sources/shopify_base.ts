@@ -233,7 +233,15 @@ export class ShopifyAdapter implements IMarketplaceAdapter {
       const resp = await cachedFetch(
         `${this.baseUrl}/products/${encodeURIComponent(handle)}.json`,
         { method: "GET" },
-        { ttlMs: PRODUCT_JSON_TTL_MS, cacheTag: `${this.marketplace_id}:upc` },
+        {
+          ttlMs: PRODUCT_JSON_TTL_MS,
+          cacheTag: `${this.marketplace_id}:upc`,
+          // Serialize per-store so we never fire two concurrent UPC
+          // fetches at the same Shopify host. Pipeline runs all 7 stores
+          // in parallel — without this, each host was getting hammered
+          // and 429'ing within seconds of the merge() kickoff.
+          serializeKey: `shopify:${this.marketplace_id}`,
+        },
       );
       if (!resp.ok) return undefined;
       const data = resp.json<{ product?: { variants?: Array<{ barcode?: string | null }> } }>();

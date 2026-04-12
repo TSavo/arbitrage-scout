@@ -53,6 +53,16 @@ const MIN_GAP_MS: Record<string, number> = {
   // Free-tier OpenRouter caps at 16 req/min (observed via X-RateLimit-Limit),
   // not the nominal 20. 4.5s gap = 13.3/min, safely under.
   openrouter: 4500,
+  // Shopify-backed retailers have no published rate limit but start
+  // throwing 429s when all 7 adapters hit products.json in parallel. 350ms
+  // gap = ~170/min per host, well below the threshold we saw trigger 429s.
+  "shopify:bittersandbottles": 350,
+  "shopify:seelbachs": 350,
+  "shopify:shopsk": 350,
+  "shopify:woodencork": 350,
+  "shopify:caskcartel": 350,
+  "shopify:whiskybusiness": 350,
+  "shopify:flaviar": 350,
 };
 
 async function withMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
