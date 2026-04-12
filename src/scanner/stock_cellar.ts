@@ -41,6 +41,27 @@ function humanPause(): number {
 }
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** page.goto with retry — the shared tab is also driven by the main scan's
+ *  KlwinesAdapter, which occasionally navigates away and aborts our
+ *  request. Retry a few times with pauses instead of dying. */
+async function gotoSafe(page: Page, url: string, tries = 4): Promise<void> {
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      return;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (attempt < tries && /ERR_ABORTED|net::ERR|Navigation|Timeout/i.test(msg)) {
+        const backoff = 4_000 * attempt + Math.random() * 2_000;
+        log("cellar", `goto ${url} failed (${msg.slice(0, 60)}) — retry ${attempt}/${tries - 1} in ${Math.round(backoff / 1000)}s`);
+        await sleep(backoff);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 interface OrderMeta {
   readonly id: string;
   readonly date: string;
@@ -65,7 +86,7 @@ async function fetchAllOrders(page: Page): Promise<OrderMeta[]> {
   const seenIds = new Set<string>();
 
   // Open Orders (no pagination — one table, all rows).
-  await page.goto(`${BASE}/Account/Receipts`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await gotoSafe(page, `${BASE}/Account/Receipts`);
   const openRows: OrderMeta[] = await page.evaluate(`(() => {
     const tables = Array.from(document.querySelectorAll('table'));
     // Open Orders table has 'Total' in the header and no 'Shipway'.
@@ -86,7 +107,7 @@ async function fetchAllOrders(page: Page): Promise<OrderMeta[]> {
   for (let p = 1; p <= MAX_PAGES; p++) {
     const url = `${BASE}/Account/Receipts?p=${p}`;
     if (p > 1) await sleep(humanPause());
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await gotoSafe(page, url);
     const rows: OrderMeta[] = await page.evaluate(`(() => {
       const tables = Array.from(document.querySelectorAll('table'));
       const t = tables.find(t => {
@@ -114,7 +135,7 @@ async function fetchAllOrders(page: Page): Promise<OrderMeta[]> {
 
 async function fetchReceiptLines(page: Page, orderId: string): Promise<ReceiptLine[]> {
   const url = `${BASE}/receipt?OrderIds=${orderId}`;
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await gotoSafe(page, url);
   return page.evaluate(`(() => {
     // Every line item is anchored by an /products/details/:sku link; the
     // surrounding block has Unit Price + qty. Walk those anchors.
