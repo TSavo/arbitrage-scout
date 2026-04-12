@@ -13,7 +13,7 @@
  */
 
 import type { RawListing } from "../types";
-import type { LlmClient } from "./confirm";
+import type { LlmClient } from "@/llm/pool";
 
 export interface UnconstrainedExtractInput {
   readonly listing: RawListing;

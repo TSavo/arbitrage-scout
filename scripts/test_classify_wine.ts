@@ -13,7 +13,7 @@ async function main() {
     scrapedAt: Date.now(),
     extra: {},
   };
-  const result = await classify({ listing, extractedFields: {}, llmClient: llm });
+  const result = await classify({ listing, extractedFields: {}, llmClient: llm ?? undefined });
   console.log("path:", result.path.map(n => n.slug).join(" → "));
   console.log("events:", result.growthEvents.length);
 }

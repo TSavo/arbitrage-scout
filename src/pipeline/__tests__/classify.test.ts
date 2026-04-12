@@ -44,7 +44,7 @@ import { classify } from "../commands/classify";
 import { SchemaGrowthService } from "../schema_growth";
 import { TaxonomyRepo } from "@/db/repos/TaxonomyRepo";
 import type { RawListing } from "../types";
-import type { LlmClient } from "../commands/confirm";
+import type { LlmClient } from "@/llm/pool";
 
 async function seedBeverages(repo: TaxonomyRepo) {
   const root = await repo.createNode(

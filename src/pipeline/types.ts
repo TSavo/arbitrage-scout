@@ -19,27 +19,6 @@ export interface RawListing {
 
 export type MetadataValue = string | number | boolean;
 
-export interface ExtractedItem {
-  readonly id: string;
-  readonly name: string;
-  readonly productType: string;
-  readonly condition?: string;
-  readonly platform?: string;
-  readonly quantity: number;
-  readonly confidence: number;
-  readonly metadata: Readonly<Record<string, MetadataValue>>;
-}
-
-export interface CatalogMatch {
-  readonly productId: string;
-  readonly title: string;
-  readonly score: number;
-  readonly method: 'fts5' | 'embedding' | 'difflib';
-  readonly productTypeId: string;
-  readonly platform?: string;
-  readonly condition?: string;
-}
-
 export interface ValidatedListing extends RawListing {
   readonly validated: true;
   readonly validationErrors: readonly string[];

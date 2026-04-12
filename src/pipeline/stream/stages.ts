@@ -15,7 +15,7 @@
  *   see the error and pass through without work. The pipeline never halts.
  */
 
-import type { LlmClient } from "@/pipeline/commands/confirm";
+import type { LlmClient } from "@/llm/pool";
 import { validate } from "@/pipeline/commands/validate";
 import { detectTier } from "@/pipeline/commands/detect_tier";
 import { extractUnconstrained } from "@/pipeline/commands/extract_unconstrained";

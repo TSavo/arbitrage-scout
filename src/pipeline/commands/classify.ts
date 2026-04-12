@@ -27,7 +27,7 @@ import {
   type ProposedField,
 } from "../schema_growth";
 import type { RawListing } from "../types";
-import type { LlmClient } from "./confirm";
+import type { LlmClient } from "@/llm/pool";
 import { log, error } from "@/lib/logger";
 
 const MAX_DEPTH = 10;
