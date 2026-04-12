@@ -63,6 +63,8 @@ export function createTestDb() {
     CREATE TABLE products (
       id TEXT PRIMARY KEY,
       product_type_id TEXT NOT NULL REFERENCES product_types(id),
+      taxonomy_node_id INTEGER,
+      extracted_schema_version INTEGER,
       title TEXT NOT NULL,
       platform TEXT,
       release_date TEXT,
@@ -71,6 +73,77 @@ export function createTestDb() {
       metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE taxonomy_nodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_id INTEGER REFERENCES taxonomy_nodes(id),
+      slug TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT,
+      gpt_id TEXT,
+      path_cache TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      canonical INTEGER NOT NULL DEFAULT 0,
+      observation_count INTEGER NOT NULL DEFAULT 0,
+      last_observed_at TEXT,
+      UNIQUE(parent_id, slug)
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE taxonomy_node_fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      node_id INTEGER NOT NULL REFERENCES taxonomy_nodes(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      data_type TEXT NOT NULL,
+      pattern TEXT,
+      min_value REAL,
+      max_value REAL,
+      is_integer INTEGER NOT NULL DEFAULT 0,
+      format TEXT,
+      unit TEXT,
+      extract_hint TEXT,
+      is_required INTEGER NOT NULL DEFAULT 0,
+      is_searchable INTEGER NOT NULL DEFAULT 0,
+      search_weight REAL NOT NULL DEFAULT 1.0,
+      is_identifier INTEGER NOT NULL DEFAULT 0,
+      is_pricing_axis INTEGER NOT NULL DEFAULT 0,
+      display_priority INTEGER NOT NULL DEFAULT 100,
+      is_hidden INTEGER NOT NULL DEFAULT 0,
+      canonical INTEGER NOT NULL DEFAULT 0,
+      observation_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      UNIQUE(node_id, key)
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE taxonomy_node_field_enum_values (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      field_id INTEGER NOT NULL REFERENCES taxonomy_node_fields(id) ON DELETE CASCADE,
+      value TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT,
+      display_order INTEGER NOT NULL DEFAULT 100,
+      UNIQUE(field_id, value)
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE schema_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      node_id INTEGER,
+      field_id INTEGER,
+      payload TEXT NOT NULL DEFAULT '{}',
+      triggered_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
     )
   `);
 

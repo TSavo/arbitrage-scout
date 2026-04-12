@@ -127,6 +127,28 @@ async function main() {
     const { seedProductTypes } = require("./db/seed_product_types");
     const result = await seedProductTypes();
     log("cli", `seeded ${result.types} types, ${result.fields} fields, ${result.enumValues} enum values`);
+  } else if (command === "seed-taxonomy") {
+    section("SEED-TAXONOMY — Populating taxonomy_nodes");
+    const { seedTaxonomy } = require("./db/seed_taxonomy");
+    const result = await seedTaxonomy();
+    log(
+      "cli",
+      `seeded ${result.nodes} nodes, ${result.fields} fields, ${result.enumValues} enum values; linked ${result.productsLinked} products`,
+    );
+  } else if (command === "seed-from-pricecharting") {
+    section("SEED FROM PRICECHARTING — Deriving taxonomy from CSV data");
+    const { seedFromPriceCharting } = require("./db/seed_from_pricecharting");
+    const result = await seedFromPriceCharting();
+    log("cli", `processed ${result.categoriesProcessed} categories`);
+    log(
+      "cli",
+      `created ${result.nodesCreated} nodes, ${result.fieldsCreated} fields, ${result.enumValuesCreated} enum values`,
+    );
+  } else if (command === "reprocess") {
+    section("REPROCESS — Catching products up to current schema version");
+    const { reprocessStaleProducts } = require("./pipeline/reprocess");
+    const n = await reprocessStaleProducts({ limit: 1000 });
+    log("cli", `reprocessed ${n} products`);
   } else if (command === "pipe") {
     section("PIPE — Command pipeline (experimental)");
     const { CommandPipeline } = require("./pipeline");
@@ -248,7 +270,7 @@ async function main() {
     log("cli", `total errors: ${metrics.totalErrors}`);
     log("cli", `total time: ${(metrics.totalTimeMs / 1000).toFixed(1)}s`);
   } else {
-    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify|seed-types|pipe]");
+    console.log("Usage: npx tsx src/cli.ts [stock|scan|trends|arbitrage|platforms|embed|verify|seed-types|seed-taxonomy|seed-from-pricecharting|reprocess|pipe]");
     process.exit(1);
   }
 }

@@ -134,5 +134,91 @@ sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_field_enum_value ON product_ty
 try { sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_opportunities_listing_product ON opportunities(listing_id, product_id)`); } catch {}
 try { sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_listing_items ON listing_items(listing_id, product_id)`); } catch {}
 
+// ── Taxonomy tables (hierarchical, DB-driven) ─────────────────────────
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS taxonomy_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES taxonomy_nodes(id),
+    slug TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT,
+    gpt_id TEXT,
+    path_cache TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    canonical INTEGER NOT NULL DEFAULT 0,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    last_observed_at TEXT
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_parent_slug ON taxonomy_nodes(parent_id, slug)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_parent ON taxonomy_nodes(parent_id)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_path ON taxonomy_nodes(path_cache)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_canonical ON taxonomy_nodes(canonical)`);
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS taxonomy_node_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id INTEGER NOT NULL REFERENCES taxonomy_nodes(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    data_type TEXT NOT NULL,
+    pattern TEXT,
+    min_value REAL,
+    max_value REAL,
+    is_integer INTEGER NOT NULL DEFAULT 0,
+    format TEXT,
+    unit TEXT,
+    extract_hint TEXT,
+    is_required INTEGER NOT NULL DEFAULT 0,
+    is_searchable INTEGER NOT NULL DEFAULT 0,
+    search_weight REAL NOT NULL DEFAULT 1.0,
+    is_identifier INTEGER NOT NULL DEFAULT 0,
+    is_pricing_axis INTEGER NOT NULL DEFAULT 0,
+    display_priority INTEGER NOT NULL DEFAULT 100,
+    is_hidden INTEGER NOT NULL DEFAULT 0,
+    canonical INTEGER NOT NULL DEFAULT 0,
+    observation_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_node_field_key ON taxonomy_node_fields(node_id, key)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_node_field_node ON taxonomy_node_fields(node_id)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_node_field_pricing_axis ON taxonomy_node_fields(is_pricing_axis)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_node_field_identifier ON taxonomy_node_fields(is_identifier)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_node_field_searchable ON taxonomy_node_fields(is_searchable)`);
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS taxonomy_node_field_enum_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    field_id INTEGER NOT NULL REFERENCES taxonomy_node_fields(id) ON DELETE CASCADE,
+    value TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT,
+    display_order INTEGER NOT NULL DEFAULT 100
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_field_enum_value ON taxonomy_node_field_enum_values(field_id, value)`);
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS schema_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    node_id INTEGER,
+    field_id INTEGER,
+    payload TEXT NOT NULL DEFAULT '{}',
+    triggered_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )
+`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_schema_versions_created ON schema_versions(created_at)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_schema_versions_node ON schema_versions(node_id)`);
+
+// Products: taxonomy link + extraction watermark (idempotent)
+try { sqlite.exec(`ALTER TABLE products ADD COLUMN taxonomy_node_id INTEGER`); } catch {}
+try { sqlite.exec(`ALTER TABLE products ADD COLUMN extracted_schema_version INTEGER`); } catch {}
+try { sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_products_taxonomy_node ON products(taxonomy_node_id)`); } catch {}
+
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

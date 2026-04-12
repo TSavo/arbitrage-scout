@@ -78,6 +78,105 @@ export const productTypeFieldEnumValues = sqliteTable(
   (t) => [uniqueIndex("uq_field_enum_value").on(t.fieldId, t.value)],
 );
 
+// ── Taxonomy (DB-driven hierarchical product tree) ───────────────────
+
+export const taxonomyNodes = sqliteTable(
+  "taxonomy_nodes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    parentId: integer("parent_id"),
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    description: text("description"),
+    gptId: text("gpt_id"),
+    pathCache: text("path_cache").notNull(),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+    canonical: integer("canonical", { mode: "boolean" }).notNull().default(false),
+    observationCount: integer("observation_count").notNull().default(0),
+    lastObservedAt: text("last_observed_at"),
+  },
+  (t) => [
+    uniqueIndex("uq_taxonomy_parent_slug").on(t.parentId, t.slug),
+    index("ix_taxonomy_parent").on(t.parentId),
+    index("ix_taxonomy_path").on(t.pathCache),
+    index("ix_taxonomy_canonical").on(t.canonical),
+  ],
+);
+
+export const taxonomyNodeFields = sqliteTable(
+  "taxonomy_node_fields",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    nodeId: integer("node_id")
+      .notNull()
+      .references(() => taxonomyNodes.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    dataType: text("data_type").notNull(),
+    pattern: text("pattern"),
+    minValue: real("min_value"),
+    maxValue: real("max_value"),
+    isInteger: integer("is_integer", { mode: "boolean" }).notNull().default(false),
+    format: text("format"),
+    unit: text("unit"),
+    extractHint: text("extract_hint"),
+    isRequired: integer("is_required", { mode: "boolean" }).notNull().default(false),
+    isSearchable: integer("is_searchable", { mode: "boolean" }).notNull().default(false),
+    searchWeight: real("search_weight").notNull().default(1.0),
+    isIdentifier: integer("is_identifier", { mode: "boolean" }).notNull().default(false),
+    isPricingAxis: integer("is_pricing_axis", { mode: "boolean" }).notNull().default(false),
+    displayPriority: integer("display_priority").notNull().default(100),
+    isHidden: integer("is_hidden", { mode: "boolean" }).notNull().default(false),
+    canonical: integer("canonical", { mode: "boolean" }).notNull().default(false),
+    observationCount: integer("observation_count").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_taxonomy_node_field_key").on(t.nodeId, t.key),
+    index("ix_taxonomy_node_field_node").on(t.nodeId),
+    index("ix_taxonomy_node_field_pricing_axis").on(t.isPricingAxis),
+    index("ix_taxonomy_node_field_identifier").on(t.isIdentifier),
+    index("ix_taxonomy_node_field_searchable").on(t.isSearchable),
+  ],
+);
+
+export const taxonomyNodeFieldEnumValues = sqliteTable(
+  "taxonomy_node_field_enum_values",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    fieldId: integer("field_id")
+      .notNull()
+      .references(() => taxonomyNodeFields.id, { onDelete: "cascade" }),
+    value: text("value").notNull(),
+    label: text("label").notNull(),
+    description: text("description"),
+    displayOrder: integer("display_order").notNull().default(100),
+  },
+  (t) => [uniqueIndex("uq_taxonomy_field_enum_value").on(t.fieldId, t.value)],
+);
+
+export const schemaVersions = sqliteTable(
+  "schema_versions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventType: text("event_type").notNull(),
+    nodeId: integer("node_id"),
+    fieldId: integer("field_id"),
+    payload: text("payload", { mode: "json" })
+      .notNull()
+      .$type<Record<string, unknown>>()
+      .default({}),
+    triggeredBy: text("triggered_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("ix_schema_versions_created").on(t.createdAt),
+    index("ix_schema_versions_node").on(t.nodeId),
+  ],
+);
+
 // ── Products ─────────────────────────────────────────────────────────
 
 export const products = sqliteTable(
@@ -87,6 +186,8 @@ export const products = sqliteTable(
     productTypeId: text("product_type_id")
       .notNull()
       .references(() => productTypes.id),
+    taxonomyNodeId: integer("taxonomy_node_id"),
+    extractedSchemaVersion: integer("extracted_schema_version"),
     title: text("title").notNull(),
     platform: text("platform"),
     releaseDate: text("release_date"),
@@ -102,6 +203,7 @@ export const products = sqliteTable(
   },
   (table) => [
     index("ix_products_type_volume").on(table.productTypeId, table.salesVolume),
+    index("ix_products_taxonomy_node").on(table.taxonomyNodeId),
   ],
 );
 
