@@ -4,6 +4,78 @@ import { embeddings, products } from "../schema";
 import { cachedFetch } from "@/lib/cached_fetch";
 import { log, error } from "@/lib/logger";
 
+/**
+ * Compute a single 4096-dim embedding. Tries Ollama first (free, local GPU);
+ * on timeout or error, falls back to OpenRouter's qwen/qwen3-embedding-8b,
+ * which returns the same dimension so existing stored vectors remain
+ * compatible. OpenRouter bills ~$0.00000011 per call — trivial.
+ */
+async function computeEmbedding(
+  text: string,
+  ollamaUrl: string,
+): Promise<number[] | null> {
+  const t0 = Date.now();
+  try {
+    const resp = await cachedFetch(
+      `${ollamaUrl}/api/embed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
+      },
+      { ttlMs: null, cacheTag: "embed", networkTimeoutMs: 60_000, maxRetries: 1 },
+    );
+    if (resp.ok) {
+      const vec = resp.json<{ embeddings?: number[][] }>().embeddings?.[0];
+      if (vec?.length) {
+        log("embedding", `ollama ok dim=${vec.length} ${Date.now() - t0}ms`);
+        return vec;
+      }
+    }
+    error("embedding", `ollama bad response (${resp.status}) ${Date.now() - t0}ms — falling back to OpenRouter`);
+  } catch (err) {
+    error("embedding", `ollama failed after ${Date.now() - t0}ms (${(err as Error).message}) — falling back to OpenRouter`);
+  }
+
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (!orKey) {
+    error("embedding", "no OPENROUTER_API_KEY — cannot fall back");
+    return null;
+  }
+  const t1 = Date.now();
+  try {
+    const resp = await cachedFetch(
+      "https://openrouter.ai/api/v1/embeddings",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${orKey}`,
+          "HTTP-Referer": "https://arbitrage-scout.local",
+          "X-Title": "arbitrage-scout",
+        },
+        body: JSON.stringify({ model: "qwen/qwen3-embedding-8b", input: text }),
+      },
+      { ttlMs: null, cacheTag: "embed-or", networkTimeoutMs: 30_000, maxRetries: 2 },
+    );
+    if (!resp.ok) {
+      error("embedding", `openrouter ${resp.status} ${Date.now() - t1}ms: ${resp.body.slice(0, 120)}`);
+      return null;
+    }
+    const data = resp.json<{ data?: Array<{ embedding: number[] }> }>();
+    const vec = data.data?.[0]?.embedding;
+    if (!vec?.length) {
+      error("embedding", `openrouter returned no vector ${Date.now() - t1}ms`);
+      return null;
+    }
+    log("embedding", `openrouter ok dim=${vec.length} ${Date.now() - t1}ms`);
+    return vec;
+  } catch (err) {
+    error("embedding", `openrouter failed after ${Date.now() - t1}ms`, err);
+    return null;
+  }
+}
+
 function floatsToBuffer(vec: number[]): Buffer {
   const buf = Buffer.alloc(vec.length * 4);
   for (let i = 0; i < vec.length; i++) buf.writeFloatLE(vec[i], i * 4);
@@ -89,35 +161,11 @@ export class EmbeddingRepo {
     const existing = await this.exists(entityType, entityId);
     if (existing) return this.get(entityType, entityId);
 
-    log("embedding", `MISS ${entityType}:${entityId} — calling Ollama`);
-    const t0 = Date.now();
-    try {
-      const resp = await cachedFetch(
-        `${ollamaUrl}/api/embed`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
-        },
-        { ttlMs: null, cacheTag: "embed" },
-      );
-      if (!resp.ok) {
-        error("embedding", `Ollama ${resp.status} after ${Date.now() - t0}ms`);
-        return null;
-      }
-      const data = resp.json<{ embeddings?: number[][] }>();
-      const vec = data.embeddings?.[0];
-      if (!vec?.length) {
-        error("embedding", `Ollama returned no vector after ${Date.now() - t0}ms`);
-        return null;
-      }
-      await this.set(entityType, entityId, vec);
-      log("embedding", `computed ${entityType}:${entityId} dim=${vec.length} ${Date.now() - t0}ms`);
-      return vec;
-    } catch (err) {
-      error("embedding", `Ollama failed after ${Date.now() - t0}ms`, err);
-      return null;
-    }
+    log("embedding", `MISS ${entityType}:${entityId} — computing`);
+    const vec = await computeEmbedding(text, ollamaUrl);
+    if (!vec) return null;
+    await this.set(entityType, entityId, vec);
+    return vec;
   }
 
   /**
@@ -152,7 +200,7 @@ export class EmbeddingRepo {
             input: uncached.map((u) => u.text),
           }),
         },
-        { ttlMs: null, cacheTag: "embed-batch" },
+        { ttlMs: null, cacheTag: "embed-batch", networkTimeoutMs: 120_000 },
       );
       if (!resp.ok) {
         error("embedding", `Ollama batch ${resp.status} after ${Date.now() - t0}ms`);
