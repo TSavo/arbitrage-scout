@@ -16,6 +16,67 @@ The schema for any product is the **accumulated fields along the path from root 
 
 ---
 
+## Cost Hierarchy (drives all pipeline decisions)
+
+| Cost | Tier | Implication |
+|---|---|---|
+| CPU cycles | free | Compute freely |
+| Disk I/O | essentially free | Materialize aggressively; persist caches |
+| Local DB reads/writes | cheap | Prefer queries over LLM calls without hesitation |
+| Embedding inference | moderate (~2s) | Cache aggressively |
+| LLM inference | expensive (1–5s) | **Every avoided call is the win** |
+
+**The pipeline is optimized for avoiding LLM calls.** Everything else is a tool we spend freely toward that end. See `CACHING_DESIGN.md` for the caching architecture that enforces this.
+
+## Pipeline Tiers (fast path is the common path)
+
+The pipeline is structured as **three tiers in decreasing frequency**, not as "the full pipeline with some shortcuts." The full walk is the emergency fallback, not the default.
+
+### Tier 1 — External ID match (target: ~80% of listings in steady state)
+
+Adapter emits a canonical external identifier in `listing.extra` (`pc_product_id`, `discogs_id`, `tcgplayer_id`, `upc`, `asin`, `epid`, `isbn`, `mpn`). We look it up in `product_identifiers`. Hit → product is known, taxonomy node is known, schema is known.
+
+Phases: validate → lookup identifier → upsert listing → upsert listing_item → write price_point → evaluate → emit.
+
+No extract. No classify. No identity resolution. No schema walk. **Zero LLM calls.** Sub-10ms per listing.
+
+### Tier 2 — Cached path (target: most of the remaining tail)
+
+We've seen this exact listing before (`marketplace_id + marketplace_listing_id` hit in `listings`). Product is already identified. Price may have changed.
+
+Phases: validate → lookup listing → re-evaluate at new price → emit.
+
+No extract. No classify. No identity. **Zero LLM calls.** Even cheaper than Tier 1 (one less table lookup).
+
+### Tier 3 — Full walk (target: novel listings only)
+
+Nothing gives us a shortcut. This is where we pay for LLM work.
+
+Phases: validate → extract (unconstrained) → classify (walk, possibly cached per level) → resolve schema → validate fields → resolve identity → persist → price → evaluate → emit.
+
+Expensive, but rare once the market is covered. And each Tier-3 execution populates caches that make future listings Tier-1 or Tier-2. The tail shrinks as the system ages.
+
+### Tier distribution is a KPI
+
+If Tier-3 exceeds ~20% of scan traffic in steady state, something is broken:
+- Adapters aren't emitting identifiers they could
+- `product_identifiers` isn't getting populated on persist
+- Classification cache isn't being written
+- Schema invalidation is too aggressive
+
+The pipeline emits per-tier metrics to the event bus. The dashboard shows tier distribution as a headline health signal.
+
+### Implication for implementation
+
+`detectTier` is the first phase after validation. It's a handful of indexed DB lookups — cheap enough to run unconditionally on every listing. Its return value routes the listing to one of three code paths. **Downstream code never re-checks "is this a known product?"** — the tier is the verdict, and every phase trusts it.
+
+This means:
+- Tier 1 and Tier 2 are their own code paths with their own minimal set of phases, not the full pipeline with early-returns peppered in.
+- Phases are designed knowing which tier they participate in. Extract/classify/validate-fields/resolve-identity exist **only in Tier 3**. Price/evaluate/emit exist in all tiers.
+- Metrics are collected per tier. Cache hits per tier. LLM calls per tier (should be zero for Tiers 1–2, always).
+
+---
+
 ## Schema
 
 ### `taxonomy_nodes`
@@ -308,48 +369,110 @@ The reprocessing worker is separate from the hot pipeline. Always async. Rate-li
 
 ## Pipeline integration
 
-The walk is Phase 2. Full pipeline ordering:
+The pipeline routes listings through one of three tiers (see top of this doc). All tiers start with validation and end with evaluate + emit. Tier 3 is the only tier where extraction and classification run.
 
-### Phase 1 — Unconstrained extract
+### All tiers: Phase 0 — Validate
+
+Listing sanity check (required fields present, price is a number, etc.). Same for every tier.
+
+### All tiers: Phase 1 — Detect tier
+
+A handful of indexed DB lookups:
+1. Check `listing.extra` for known identifier types → query `product_identifiers` → if hit, **Tier 1**.
+2. Query `listings` by `(marketplaceId, marketplaceListingId)` → if hit, **Tier 2**.
+3. Otherwise → **Tier 3**.
+
+The tier is the verdict. Downstream phases never re-ask "is this known?"
+
+### Tier 1 — External ID match
+
+**Phases**: upsert listing → upsert listing_item (product already known) → write price_point (dimensions from adapter's `extra` or empty) → evaluate → emit.
+
+No extract, no classify, no identity resolution. Sub-10ms per listing. Zero LLM calls.
+
+### Tier 2 — Cached listing
+
+**Phases**: update listing (price may have changed) → re-evaluate opportunities at new price → emit.
+
+Even cheaper than Tier 1. Zero LLM calls.
+
+### Tier 3 — Full walk
+
+This is the only tier where the LLM is invoked. Caching at every boundary (see `CACHING_DESIGN.md`) makes future runs over the same product fall into Tier 1 or Tier 2.
+
+#### Phase 3.1 — Unconstrained extract
 
 LLM reads raw listing text. Returns flat `Record<string, unknown>`. No target schema. Goal: capture everything the text asserts as structured key-values.
 
-### Phase 2 — Classify (the walk)
+Cache key: hash of listing title + description. A second view of the same raw text never re-extracts.
+
+#### Phase 3.2 — Classify (the walk)
 
 Descend the taxonomy using the extracted dict. Output: a `path` of nodes and any `GrowthEvent`s applied.
 
-### Phase 3 — Schema resolution
+Each level's descent is independently cached: `(extracted_fields_fingerprint, parent_node_id, schema_version) → child_node_id`. Partial hits speed the walk even when full-path cache misses. A fully cached descent is zero LLM calls.
+
+#### Phase 3.3 — Schema resolution
 
 Accumulate fields along the path. Resulting schema is a `FieldDef[]` with identifier, pricing-axis, searchable flags.
 
-### Phase 4 — Validate & coerce
+Cached per node via the taxonomy cache. Invalidated on `taxonomy.grew` / `field.added`.
+
+#### Phase 3.4 — Validate & coerce
 
 Walk the extracted dict against the accumulated schema. Apply `data_type` coercion, validate constraints. Drop fields not in schema or coerce-and-flag.
 
-### Phase 5 — Identity resolution
+Pure CPU. Not cached (the input is already derived from cached upstream work).
+
+#### Phase 3.5 — Identity resolution
 
 Given the validated fields and the schema's `is_identifier` fields:
 
-1. External identifier match (SKU, UPC, etc. in `product_identifiers`).
+1. External identifier match (SKU, UPC, etc. in `product_identifiers`). (Redundant with Tier 1, but handles listings where the adapter didn't flag the identifier in `extra`.)
 2. Canonical field match on the product's taxonomy node (all identifier fields equal).
 3. Embedding similarity within the same taxonomy node (top-k, threshold).
-4. No match → new product.
+4. No match → create new product.
 
-### Phase 6 — Persist
+Cached per `(node_id, canonical_field_fingerprint) → product_id`.
 
-Product row (if new). Listing row. Listing_item link. Embedding for the listing text. Set `extracted_schema_version`.
+#### Phase 3.6 — Persist
 
-### Phase 7 — Price
+Product row (if new). Listing row. Listing_item link. Embedding for the listing text. Set `extracted_schema_version`. **Crucially, if the adapter emitted an external identifier in `extra`, record it in `product_identifiers`** — this is what makes future listings of this product fall into Tier 1.
 
-Extract pricing-axis values from validated fields → `dimensions` JSON. Write `price_points` row.
+Emits invalidation events for product-dependent caches.
 
-### Phase 8 — Evaluate
+### All tiers: Phase N-1 — Price
 
-Compare listing price to market (aggregate of recent price_points with matching dimensions for this product). Produce opportunities if profit threshold met.
+Extract pricing-axis values from validated fields (Tier 3) or from adapter-provided dimensions (Tier 1/2) → `dimensions` JSON. Write `price_points` row. Invalidates `market.price` cache for this product.
 
-### Phase 9 — Emit
+### All tiers: Phase N — Evaluate
 
-Event bus: `listing.classified`, `product.created`, `opportunity.found`, `taxonomy.grew`, etc. SSE forwards. Watchlist checks.
+Compare listing price to market (aggregate of recent price_points with matching dimensions for this product). Cached via `market_prices_mv`. Produce opportunities if profit threshold met.
+
+### All tiers: Phase N+1 — Emit
+
+Event bus: `listing.classified`, `product.created`, `opportunity.found`, `taxonomy.grew`, etc. SSE forwards. Watchlist checks. Tier metric emitted.
+
+---
+
+## LLM call budget per listing
+
+By tier, in steady state:
+
+| Tier | LLM calls |
+|---|---|
+| 1 | 0 |
+| 2 | 0 |
+| 3 (cold cache) | 1 (extract) + up to depth-of-tree (classify, ~5) = ~6 |
+| 3 (warm cache) | 0–2 depending on cache hits |
+
+A scan processing 1000 listings with 80/15/5 tier distribution averages:
+- 800 × 0 (Tier 1)
+- 150 × 0 (Tier 2)
+- 50 × ~3 (Tier 3 with partial caching)
+- = ~150 LLM calls for 1000 listings
+
+Compare to a naive pipeline (no tiers, no caching): 1000 × 6 = 6000 LLM calls. The tier system is a 40× reduction in LLM spend.
 
 ---
 

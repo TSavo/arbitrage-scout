@@ -4,6 +4,7 @@
 
 import Database from "better-sqlite3";
 import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { eq } from "drizzle-orm";
 import * as schema from "../db/schema";
 
 export function createTestDb() {
@@ -288,6 +289,18 @@ export function createTestDb() {
 export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
   const now = new Date().toISOString();
 
+  // Taxonomy root — required by TaxonomyRepo.getRoot() used in the pipeline.
+  db.insert(schema.taxonomyNodes).values({
+    slug: "root",
+    label: "Root",
+    description: "Taxonomy root",
+    pathCache: "/",
+    canonical: true,
+    observationCount: 0,
+    createdAt: now,
+    createdBy: "test-seed",
+  }).run();
+
   // Product types (legacy conditionSchema/metadataSchema left empty — the
   // DB-driven schema comes from product_type_fields).
   db.insert(schema.productTypes).values({
@@ -314,6 +327,15 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
   db.insert(schema.productTypes).values({
     id: "sports_card",
     name: "Sports Card",
+    conditionSchema: [],
+    metadataSchema: [],
+  }).run();
+
+  // Generic fallback product type used when the new taxonomy-driven pipeline
+  // creates a product but has no legacy product_type mapping.
+  db.insert(schema.productTypes).values({
+    id: "generic",
+    name: "Generic",
     conditionSchema: [],
     metadataSchema: [],
   }).run();
@@ -413,15 +435,39 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
   db.insert(schema.marketplaces).values({ id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true }).run();
   db.insert(schema.marketplaces).values({ id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true }).run();
   db.insert(schema.marketplaces).values({ id: "ebay", name: "eBay", baseUrl: "https://ebay.com", supportsApi: true }).run();
+  db.insert(schema.marketplaces).values({ id: "pricecharting", name: "PriceCharting", baseUrl: "https://pricecharting.com", supportsApi: true }).run();
 
-  // Products
+  // Minimal taxonomy leaf: retro_game under the root that was inserted above.
+  const rootNode = db.select().from(schema.taxonomyNodes).where(eq(schema.taxonomyNodes.slug, "root")).get();
+  const retroNode = db.insert(schema.taxonomyNodes).values({
+    parentId: rootNode!.id, slug: "retro_game", label: "Retro Video Game",
+    pathCache: "/retro_game", canonical: true, observationCount: 0,
+    createdAt: now, createdBy: "seed",
+  }).returning({ id: schema.taxonomyNodes.id }).get();
+
+  const cond = db.insert(schema.taxonomyNodeFields).values({
+    nodeId: retroNode.id, key: "condition", label: "Condition",
+    dataType: "string", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false, isInteger: false,
+    displayPriority: 5, isHidden: false, canonical: true, observationCount: 0,
+    createdAt: now, createdBy: "seed",
+  }).returning({ id: schema.taxonomyNodeFields.id }).get();
+  for (const [i, v] of ["loose", "cib", "new_sealed"].entries()) {
+    db.insert(schema.taxonomyNodeFieldEnumValues).values({
+      fieldId: cond.id, value: v, label: v, displayOrder: (i + 1) * 10,
+    }).run();
+  }
+
+  // Products — include taxonomyNodeId so tier-1/tier-2 paths can resolve the node.
   db.insert(schema.products).values({
-    id: "pc-1", productTypeId: "retro_game", title: "Super Mario 64",
+    id: "pc-1", productTypeId: "retro_game", taxonomyNodeId: retroNode.id,
+    title: "Super Mario 64",
     platform: "Nintendo 64", salesVolume: 5000, createdAt: now, updatedAt: now,
   }).run();
 
   db.insert(schema.products).values({
-    id: "pc-2", productTypeId: "retro_game", title: "GoldenEye 007",
+    id: "pc-2", productTypeId: "retro_game", taxonomyNodeId: retroNode.id,
+    title: "GoldenEye 007",
     platform: "Nintendo 64", salesVolume: 3000, createdAt: now, updatedAt: now,
   }).run();
 

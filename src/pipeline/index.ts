@@ -1,9 +1,76 @@
 export * from './types';
 export * from './utils';
 export * from './pipeline';
-export * from './commands';
 
-export type { ProductTypeSchema } from './commands/extract';
-export type { PriceData } from './commands/price';
-export type { OpportunityThresholds } from './commands/evaluate';
-export type { LlmClient } from './commands/confirm';
+// Re-export commands explicitly to avoid clashing `OpportunityThresholds`
+// between the legacy evaluate.ts and the new evaluate_opportunities.ts.
+export {
+  validate,
+  ruleBasedExtract,
+  llmExtract,
+  getProductTypeSchema,
+  match,
+  deduplicate,
+  confirm,
+  lookupPrices,
+  getMarketPrice,
+  evaluate,
+  store,
+  extractUnconstrained,
+  ruleBasedUnconstrainedExtract,
+  classify,
+  detectTier,
+  processKnownProduct,
+  processCachedListing,
+  validateFields,
+  resolveIdentity,
+  persist,
+  writePricePoint,
+  evaluateOpportunities,
+} from './commands';
+
+export type {
+  ValidationInput,
+  ValidationOutput,
+  ProductTypeSchema,
+  ExtractInput,
+  ExtractOutput,
+  MatchInput,
+  MatchOutput,
+  DedupInput,
+  DedupOutput,
+  ConfirmInput,
+  ConfirmOutput,
+  LlmClient,
+  PriceInput,
+  PriceOutput,
+  PriceData,
+  PriceDimensions,
+  EvaluateInput,
+  EvaluateOutput,
+  StoreInput,
+  StoreOutput,
+  UnconstrainedExtractInput,
+  UnconstrainedExtractResult,
+  ClassifyInput,
+  ClassifyResult,
+  GrowthEvent,
+  GrowthEventType,
+  TierDetection,
+  ProcessKnownInput,
+  ProcessKnownResult,
+  ProcessCachedInput,
+  ProcessCachedResult,
+  ValidateFieldsInput,
+  ValidatedFields,
+  FieldValue,
+  ResolveIdentityInput,
+  IdentityResolution,
+  IdentityMethod,
+  PersistInput,
+  PersistResult,
+  WritePricePointInput,
+  WritePricePointResult,
+  EvaluateOpportunitiesInput,
+  OpportunityThresholds,
+} from './commands';

@@ -1,14 +1,18 @@
 /**
- * Integration tests for CommandPipeline.
+ * Integration tests for CommandPipeline — taxonomy-driven flow.
  *
- * Uses an in-memory SQLite DB injected via vi.mock of @/db/client, so the
- * pipeline's store/price/check-existing paths hit a real DB. The Ollama
- * embedding repo is mocked (no network), and fetch is stubbed to ensure
- * no external calls.
+ * The pipeline now routes listings through three tiers:
+ *   Tier 1 (external_id): adapter gave us pc_product_id / upc / discogs_id /
+ *     etc. We skip to persist + price + evaluate.
+ *   Tier 2 (cached):      listing was previously stored with confirmed items.
+ *     We re-evaluate without LLM.
+ *   Tier 3 (full_walk):   novel listing → extract + classify + validateFields
+ *     + resolveIdentity + persist + price + evaluate.
+ *
+ * Tests use an in-memory SQLite DB seeded with a minimal taxonomy tree.
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { eq, and } from "drizzle-orm";
 import { createTestDb, seedTestData } from "@/__tests__/helpers";
 
 type TestDbBundle = ReturnType<typeof createTestDb>;
@@ -28,7 +32,7 @@ vi.mock("@/db/client", () => ({
 vi.mock("@/db/repos/EmbeddingRepo", () => {
   const stub = {
     exists: vi.fn().mockResolvedValue(false),
-    getOrCompute: vi.fn().mockResolvedValue(undefined),
+    getOrCompute: vi.fn().mockResolvedValue(null),
     findSimilar: vi.fn().mockResolvedValue([]),
   };
   return {
@@ -54,8 +58,7 @@ afterEach(() => {
 
 // Import AFTER mocks are set up.
 import { CommandPipeline } from "../pipeline";
-import type { RawListing, Opportunity } from "../types";
-import type { ProductTypeSchema } from "../commands/extract";
+import type { RawListing } from "../types";
 import * as schema from "@/db/schema";
 
 function makeRaw(overrides: Partial<RawListing> = {}): RawListing {
@@ -74,98 +77,7 @@ function makeRaw(overrides: Partial<RawListing> = {}): RawListing {
   };
 }
 
-function testSchema(): ProductTypeSchema[] {
-  return [
-    {
-      id: "retro_game",
-      name: "Retro Video Game",
-      fields: [
-        {
-          key: "platform",
-          label: "Platform",
-          dataType: "string",
-          isInteger: false,
-          isRequired: false,
-          isSearchable: true,
-          searchWeight: 2,
-          isIdentifier: false,
-          isPricingAxis: false,
-          displayPriority: 20,
-          isHidden: false,
-        },
-        {
-          key: "condition",
-          label: "Condition",
-          dataType: "string",
-          isInteger: false,
-          isRequired: false,
-          isSearchable: false,
-          searchWeight: 1,
-          isIdentifier: false,
-          isPricingAxis: true,
-          displayPriority: 5,
-          isHidden: false,
-          enumValues: [
-            { value: "loose", label: "Loose", displayOrder: 10 },
-            { value: "cib", label: "Complete in box", displayOrder: 20 },
-            { value: "new_sealed", label: "New sealed", displayOrder: 30 },
-          ],
-        },
-      ],
-    },
-    {
-      id: "pokemon_card",
-      name: "Pokemon Card",
-      fields: [
-        {
-          key: "set_name",
-          label: "Set name",
-          dataType: "string",
-          isInteger: false,
-          isRequired: false,
-          isSearchable: true,
-          searchWeight: 3,
-          isIdentifier: true,
-          isPricingAxis: false,
-          displayPriority: 10,
-          isHidden: false,
-        },
-        {
-          key: "card_number",
-          label: "Card number",
-          dataType: "string",
-          isInteger: false,
-          isRequired: false,
-          isSearchable: true,
-          searchWeight: 3,
-          isIdentifier: true,
-          isPricingAxis: false,
-          displayPriority: 20,
-          isHidden: false,
-        },
-        {
-          key: "condition",
-          label: "Condition",
-          dataType: "string",
-          isInteger: false,
-          isRequired: false,
-          isSearchable: false,
-          searchWeight: 1,
-          isIdentifier: false,
-          isPricingAxis: true,
-          displayPriority: 5,
-          isHidden: false,
-          enumValues: [
-            { value: "loose", label: "Loose", displayOrder: 10 },
-            { value: "graded", label: "Graded", displayOrder: 20 },
-          ],
-        },
-      ],
-    },
-  ];
-}
-
-describe("CommandPipeline.processListing — known product fast path", () => {
+describe("CommandPipeline — Tier 1 (external_id fast path)", () => {
   it("creates opportunity for a PriceCharting-known product below market", async () => {
     const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
 
@@ -177,15 +89,31 @@ describe("CommandPipeline.processListing — known product fast path", () => {
       extra: { pc_product_id: "pc-1", include: "complete" },
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
+    const result = await pipeline.processListing(raw);
 
     expect(result.opportunities.length).toBe(1);
     const opp = result.opportunities[0];
     expect(opp.productId).toBe("pc-1");
     expect(opp.condition).toBe("cib");
     expect(opp.profit).toBeGreaterThan(5);
-    // fast_path command should be recorded
     expect(result.commands.some((c) => c.type === "fast_path")).toBe(true);
+    expect(result.commands.some((c) => c.type === "detect_tier")).toBe(true);
+  });
+
+  it("records detect_tier as external_id when pc_product_id matches an existing product", async () => {
+    const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
+    const raw = makeRaw({
+      marketplaceId: "pricecharting",
+      listingId: "pc-tier1",
+      title: "Super Mario 64",
+      priceUsd: 5,
+      extra: { pc_product_id: "pc-1", include: "complete" },
+    });
+
+    const result = await pipeline.processListing(raw);
+    const tierCmd = result.commands.find((c) => c.type === "detect_tier")!;
+    expect(tierCmd).toBeTruthy();
+    expect((tierCmd.output as { kind: string }).kind).toBe("external_id");
   });
 
   it("skips when profit below threshold on fast path", async () => {
@@ -199,19 +127,34 @@ describe("CommandPipeline.processListing — known product fast path", () => {
       extra: { pc_product_id: "pc-2", include: "disc only" }, // loose
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
+    const result = await pipeline.processListing(raw);
 
     expect(result.opportunities.length).toBe(0);
     expect(result.commands.some((c) => c.type === "fast_path")).toBe(true);
   });
+
+  it("never runs extract/classify on tier-1 fast path", async () => {
+    const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
+    const raw = makeRaw({
+      marketplaceId: "pricecharting",
+      listingId: "pc-fast",
+      title: "Super Mario 64",
+      priceUsd: 5,
+      extra: { pc_product_id: "pc-1", include: "complete" },
+    });
+    const result = await pipeline.processListing(raw);
+    const cmdTypes = result.commands.map((c) => c.type);
+    expect(cmdTypes).not.toContain("extract");
+    expect(cmdTypes).not.toContain("classify");
+    expect(cmdTypes).not.toContain("resolve_identity");
+  });
 });
 
-describe("CommandPipeline.processListing — existing-items re-evaluate path", () => {
-  it("re-evaluates an existing listing without LLM", async () => {
+describe("CommandPipeline — Tier 2 (cached re-evaluate)", () => {
+  it("re-evaluates a previously-seen listing without LLM", async () => {
     const { db } = testBundle;
     const now = new Date().toISOString();
 
-    // Pre-seed a listing and a confirmed item
     const listing = db.insert(schema.listings).values({
       marketplaceId: "shopgoodwill",
       marketplaceListingId: "sgw-existing",
@@ -229,7 +172,7 @@ describe("CommandPipeline.processListing — existing-items re-evaluate path", (
       productId: "pc-1",
       quantity: 1,
       condition: "loose",
-      conditionDetails: {},
+      conditionDetails: { condition: "loose" },
       estimatedValueUsd: 25,
       confidence: 0.9,
       confirmed: true,
@@ -240,17 +183,19 @@ describe("CommandPipeline.processListing — existing-items re-evaluate path", (
     const raw = makeRaw({
       marketplaceId: "shopgoodwill",
       listingId: "sgw-existing",
-      priceUsd: 3, // cheaper
+      priceUsd: 3, // cheaper than before
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
+    const result = await pipeline.processListing(raw);
 
     expect(result.opportunities.length).toBe(1);
     expect(result.opportunities[0].productId).toBe("pc-1");
-    expect(result.commands.some((c) => c.type === "reevaluate")).toBe(true);
+    expect(result.commands.some((c) => c.type === "fast_path")).toBe(true);
+    const tier = result.commands.find((c) => c.type === "detect_tier")!;
+    expect((tier.output as { kind: string }).kind).toBe("cached");
   });
 
-  it("returns empty when existing items are not confirmed", async () => {
+  it("falls through to full_walk when existing items are not confirmed", async () => {
     const { db } = testBundle;
     const now = new Date().toISOString();
 
@@ -285,66 +230,205 @@ describe("CommandPipeline.processListing — existing-items re-evaluate path", (
       priceUsd: 3,
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
-    expect(result.opportunities.length).toBe(0);
+    const result = await pipeline.processListing(raw);
+    // Not confirmed → tier = full_walk, not cached.
+    const tier = result.commands.find((c) => c.type === "detect_tier")!;
+    expect((tier.output as { kind: string }).kind).toBe("full_walk");
   });
 });
 
-describe("CommandPipeline.processListing — full rule-based flow (no LLM)", () => {
-  it("returns empty when no items extracted from unrelated listing", async () => {
+describe("CommandPipeline — Tier 3 (full walk)", () => {
+  it("runs all phases for a novel listing (no LLM)", async () => {
     const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
     const raw = makeRaw({
       marketplaceId: "shopgoodwill",
-      listingId: "sgw-furniture",
-      title: "Used Office Chair",
-      priceUsd: 20,
-    });
-
-    const result = await pipeline.processListing(raw, testSchema());
-    expect(result.opportunities.length).toBe(0);
-    expect(result.commands.some((c) => c.type === "extract")).toBe(true);
-  });
-
-  it("runs extract→match→dedup→confirm→price→evaluate when items present", async () => {
-    // FTS5 and difflib will both error-catch to null matches (no fts5 table),
-    // so no opportunities expected — but all stages should execute.
-    const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
-    const raw = makeRaw({
+      listingId: "sgw-novel-1",
       title: "Nintendo 64 Super Mario 64 cartridge",
       priceUsd: 5,
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
+    const result = await pipeline.processListing(raw);
 
     const cmdTypes = result.commands.map((c) => c.type);
     expect(cmdTypes).toContain("validate");
+    expect(cmdTypes).toContain("detect_tier");
     expect(cmdTypes).toContain("extract");
-    expect(cmdTypes).toContain("match");
-    expect(cmdTypes).toContain("dedup");
-    expect(cmdTypes).toContain("confirm");
+    expect(cmdTypes).toContain("classify");
+    expect(cmdTypes).toContain("validate_fields");
+    expect(cmdTypes).toContain("resolve_identity");
+    expect(cmdTypes).toContain("persist");
     expect(cmdTypes).toContain("price");
     expect(cmdTypes).toContain("evaluate");
   });
 
-  it("returns empty below profit threshold", async () => {
-    const pipeline = new CommandPipeline({
-      minProfitUsd: 1000, // unattainable
-      minMarginPct: 0.3,
-    });
+  it("creates a new product row when identity resolution has no match", async () => {
+    const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
     const raw = makeRaw({
-      marketplaceId: "pricecharting",
-      listingId: "pc-offer-hi",
-      title: "Super Mario 64",
-      priceUsd: 5,
-      extra: { pc_product_id: "pc-1", include: "disc only" },
+      marketplaceId: "shopgoodwill",
+      listingId: "sgw-novel-2",
+      title: "Some Obscure 1990 Collectible",
+      priceUsd: 10,
     });
 
-    const result = await pipeline.processListing(raw, testSchema());
-    expect(result.opportunities.length).toBe(0);
+    await pipeline.processListing(raw);
+
+    const prods = testBundle.db.select().from(schema.products).all();
+    // At minimum we should have the seeded products plus 1 new.
+    expect(prods.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("persists the listing row on the full walk", async () => {
+    const pipeline = new CommandPipeline({ minProfitUsd: 5, minMarginPct: 0.3 });
+    const raw = makeRaw({
+      marketplaceId: "shopgoodwill",
+      listingId: "sgw-persist-test",
+      title: "Some Item",
+      priceUsd: 5,
+    });
+
+    await pipeline.processListing(raw);
+
+    const listing = testBundle.db.query.listings.findFirst({
+      where: undefined,
+    });
+    // Use drizzle query
+    const listings = testBundle.db.select().from(schema.listings).all();
+    expect(listings.some((l) => l.marketplaceListingId === "sgw-persist-test")).toBe(true);
+    void listing;
   });
 });
 
-describe("DB-driven pricing dimensions", () => {
+describe("detectTier", () => {
+  it("returns external_id when pc_product_id maps to an existing product", async () => {
+    const { detectTier } = await import("../commands/detect_tier");
+    const raw = makeRaw({
+      marketplaceId: "pricecharting",
+      listingId: "x",
+      extra: { pc_product_id: "pc-1" },
+    });
+    const r = await detectTier(raw);
+    expect(r.kind).toBe("external_id");
+    if (r.kind === "external_id") {
+      expect(r.productId).toBe("pc-1");
+    }
+  });
+
+  it("returns full_walk when no identifier matches and listing is new", async () => {
+    const { detectTier } = await import("../commands/detect_tier");
+    const raw = makeRaw({ extra: { pc_product_id: "does-not-exist" } });
+    const r = await detectTier(raw);
+    expect(r.kind).toBe("full_walk");
+  });
+
+  it("returns cached when listing was previously seen with confirmed items", async () => {
+    const { db } = testBundle;
+    const now = new Date().toISOString();
+    const listing = db.insert(schema.listings).values({
+      marketplaceId: "shopgoodwill",
+      marketplaceListingId: "sgw-cache-tier",
+      title: "Test",
+      priceUsd: 1,
+      shippingUsd: 0,
+      isLot: false,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      isActive: true,
+    }).returning({ id: schema.listings.id }).get();
+    db.insert(schema.listingItems).values({
+      listingId: listing.id,
+      productId: "pc-1",
+      quantity: 1,
+      condition: "loose",
+      conditionDetails: {},
+      confidence: 1,
+      confirmed: true,
+      rawExtraction: {},
+    }).run();
+
+    const { detectTier } = await import("../commands/detect_tier");
+    const raw = makeRaw({ listingId: "sgw-cache-tier" });
+    const r = await detectTier(raw);
+    expect(r.kind).toBe("cached");
+    if (r.kind === "cached") {
+      expect(r.productIds).toContain("pc-1");
+    }
+  });
+});
+
+describe("validateFields", () => {
+  it("coerces strings, numbers, booleans against the schema", async () => {
+    const { validateFields } = await import("../commands/validate_fields");
+    const { taxonomyRepo } = await import("@/db/repos/TaxonomyRepo");
+    const node = await taxonomyRepo.getNodeBySlugPath(["retro_game"]);
+    expect(node).not.toBeNull();
+    const schemaObj = await taxonomyRepo.getAccumulatedSchema(node!.id);
+
+    const out = validateFields({
+      extracted: { condition: "CIB", junk: "ignored" },
+      schema: schemaObj,
+    });
+    expect(out.values.get("condition")).toBe("cib");
+    // Extracted fields not in schema are dropped.
+    expect(out.values.has("junk")).toBe(false);
+  });
+
+  it("flags values that violate enum constraints", async () => {
+    const { validateFields } = await import("../commands/validate_fields");
+    const { taxonomyRepo } = await import("@/db/repos/TaxonomyRepo");
+    const node = await taxonomyRepo.getNodeBySlugPath(["retro_game"]);
+    const schemaObj = await taxonomyRepo.getAccumulatedSchema(node!.id);
+
+    const out = validateFields({
+      extracted: { condition: "wobbly" },
+      schema: schemaObj,
+    });
+    expect(out.values.has("condition")).toBe(false);
+    expect(out.invalid.some((i) => i.key === "condition")).toBe(true);
+  });
+});
+
+describe("writePricePoint", () => {
+  it("derives dimensions from pricing-axis fields", async () => {
+    const { writePricePoint } = await import("../commands/write_price_point");
+    const { taxonomyRepo } = await import("@/db/repos/TaxonomyRepo");
+    const node = await taxonomyRepo.getNodeBySlugPath(["retro_game"]);
+    const schemaObj = await taxonomyRepo.getAccumulatedSchema(node!.id);
+
+    const fields = new Map<string, string | number | boolean>();
+    fields.set("condition", "loose");
+
+    const result = await writePricePoint({
+      productId: "pc-1",
+      source: "ebay",
+      priceUsd: 30,
+      fields,
+      schema: schemaObj,
+    });
+    expect(result.inserted).toBe(true);
+    expect(result.dimensions).toEqual({ condition: "loose" });
+
+    const rows = testBundle.db.select().from(schema.pricePoints).all();
+    expect(rows.some((r) => r.source === "ebay" && r.priceUsd === 30)).toBe(true);
+  });
+
+  it("refuses non-positive price", async () => {
+    const { writePricePoint } = await import("../commands/write_price_point");
+    const { taxonomyRepo } = await import("@/db/repos/TaxonomyRepo");
+    const node = await taxonomyRepo.getNodeBySlugPath(["retro_game"]);
+    const schemaObj = await taxonomyRepo.getAccumulatedSchema(node!.id);
+
+    const result = await writePricePoint({
+      productId: "pc-1",
+      source: "ebay",
+      priceUsd: 0,
+      fields: new Map(),
+      schema: schemaObj,
+    });
+    expect(result.inserted).toBe(false);
+  });
+});
+
+describe("DB-driven pricing dimensions (legacy helpers)", () => {
   it("prices a bourbon product with no pricing axes (single price)", async () => {
     const { lookupPrices, getMarketPrice } = await import("../commands/price");
 
@@ -360,9 +444,7 @@ describe("DB-driven pricing dimensions", () => {
     const result = await lookupPrices({ matches });
     expect(result.foundCount).toBe(1);
     const priceData = result.prices.get("pc-bourbon-1")!;
-    // No dimensions passed — bourbon has no pricing axes.
     expect(getMarketPrice(priceData)).toBe(3500);
-    // Entries have empty dimensions (no condition).
     expect(priceData.entries.length).toBe(1);
     expect(priceData.entries[0].dimensions).toEqual({});
   });
@@ -382,15 +464,12 @@ describe("DB-driven pricing dimensions", () => {
     const result = await lookupPrices({ matches });
     const priceData = result.prices.get("pc-sports-1")!;
 
-    // PSA 9 → $25,000
     expect(
       getMarketPrice(priceData, { condition: "graded", grade: 9, grading_company: "PSA" }),
     ).toBe(25000);
-    // PSA 8 → $5,000
     expect(
       getMarketPrice(priceData, { condition: "graded", grade: 8, grading_company: "PSA" }),
     ).toBe(5000);
-    // Raw → $200
     expect(getMarketPrice(priceData, { condition: "raw" })).toBe(200);
   });
 
@@ -449,7 +528,7 @@ describe("CommandPipeline metrics & events", () => {
       title: "Super Mario 64",
       priceUsd: 5,
       extra: { pc_product_id: "pc-1", include: "complete" },
-    }), testSchema());
+    }));
 
     await pipeline.processListing(makeRaw({
       marketplaceId: "pricecharting",
@@ -457,7 +536,7 @@ describe("CommandPipeline metrics & events", () => {
       title: "GoldenEye",
       priceUsd: 100,
       extra: { pc_product_id: "pc-2", include: "disc only" },
-    }), testSchema());
+    }));
 
     const metrics = pipeline.getMetrics();
     expect(metrics.totalListings).toBe(2);
@@ -479,7 +558,7 @@ describe("CommandPipeline metrics & events", () => {
       title: "Super Mario 64",
       priceUsd: 5,
       extra: { pc_product_id: "pc-1", include: "complete" },
-    }), testSchema());
+    }));
 
     unsubscribe();
 
@@ -495,10 +574,7 @@ describe("CommandPipeline metrics & events", () => {
       errors.push(data as Record<string, unknown>);
     });
 
-    // Force error: pass a listing that makes validate pass but then fails in
-    // checkExistingItems by pointing at a non-existent marketplace
-    // (it won't actually throw — so instead we inject an invalid pc_product_id)
-    // We'll simulate by mocking db.query.listings.findFirst to throw.
+    // Force error: monkey-patch listings.findFirst to throw.
     const original = testBundle.db.query.listings.findFirst;
     testBundle.db.query.listings.findFirst = (() => {
       throw new Error("forced failure");
@@ -509,7 +585,7 @@ describe("CommandPipeline metrics & events", () => {
       listingId: "sgw-err",
       title: "Nintendo 64 Super Mario 64",
       priceUsd: 5,
-    }), testSchema())).rejects.toThrow("forced failure");
+    }))).rejects.toThrow("forced failure");
 
     expect(errors.length).toBeGreaterThan(0);
 
