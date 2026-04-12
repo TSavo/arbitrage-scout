@@ -18,6 +18,12 @@ import { LiveAuctioneersAdapter } from "./liveauctioneers";
 import { WhatnotAdapter } from "./whatnot";
 import { KlwinesAdapter } from "./klwines";
 import { BittersAndBottlesAdapter } from "./bittersandbottles";
+import { SeelbachsAdapter } from "./seelbachs";
+import { ShopSkAdapter } from "./shopsk";
+import { WoodenCorkAdapter } from "./woodencork";
+import { CaskCartelAdapter } from "./caskcartel";
+import { WhiskyBusinessAdapter } from "./whiskybusiness";
+import { FlaviarAdapter } from "./flaviar";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -56,6 +62,18 @@ export interface AdapterConfig {
   klwines?: { enabled?: boolean; userDataDir?: string; cdpPort?: number };
   /** Bitters & Bottles — Shopify-backed craft spirits store; public products.json, no auth */
   bittersandbottles?: { enabled?: boolean };
+  /** Seelbach's — allocated bourbons (Shopify) */
+  seelbachs?: { enabled?: boolean };
+  /** ShopSK — CA-based premium wine+spirits+beer (Shopify) */
+  shopsk?: { enabled?: boolean };
+  /** Wooden Cork — craft whiskey (Shopify) */
+  woodencork?: { enabled?: boolean };
+  /** Cask Cartel — allocated/rare bourbon+tequila (Shopify) */
+  caskcartel?: { enabled?: boolean };
+  /** Whisky Business — whiskey specialist (Shopify) */
+  whiskybusiness?: { enabled?: boolean };
+  /** Flaviar — curated spirits retailer (Shopify) */
+  flaviar?: { enabled?: boolean };
 }
 
 /**
@@ -176,13 +194,24 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "KlwinesAdapter skipped (disabled in config)");
   }
 
-  // Bitters & Bottles — no credentials needed, public Shopify products.json
-  const bbCfg = cfg.bittersandbottles ?? {};
-  if (bbCfg.enabled !== false) {
-    adapters.push(new BittersAndBottlesAdapter());
-    log("registry", "built BittersAndBottlesAdapter (no-auth; Shopify public API)");
-  } else {
-    log("registry", "BittersAndBottlesAdapter skipped (disabled in config)");
+  // Shopify-backed spirits retailers — all no-auth, same pattern.
+  const shopifyStores: Array<[string, keyof AdapterConfig, () => IMarketplaceAdapter]> = [
+    ["BittersAndBottles", "bittersandbottles", () => new BittersAndBottlesAdapter()],
+    ["Seelbachs",         "seelbachs",         () => new SeelbachsAdapter()],
+    ["ShopSK",            "shopsk",            () => new ShopSkAdapter()],
+    ["WoodenCork",        "woodencork",        () => new WoodenCorkAdapter()],
+    ["CaskCartel",        "caskcartel",        () => new CaskCartelAdapter()],
+    ["WhiskyBusiness",    "whiskybusiness",    () => new WhiskyBusinessAdapter()],
+    ["Flaviar",           "flaviar",           () => new FlaviarAdapter()],
+  ];
+  for (const [name, key, factory] of shopifyStores) {
+    const conf = (cfg[key] as { enabled?: boolean } | undefined) ?? {};
+    if (conf.enabled !== false) {
+      adapters.push(factory());
+      log("registry", `built ${name}Adapter (Shopify public API)`);
+    } else {
+      log("registry", `${name}Adapter skipped (disabled in config)`);
+    }
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);
