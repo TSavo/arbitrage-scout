@@ -23,18 +23,7 @@ import {
 } from "@/db/schema";
 import type { RawListing } from "../types";
 
-/** Keys in RawListing.extra that map to canonical external identifier types. */
-const EXTERNAL_ID_KEYS: ReadonlyArray<readonly [string, string]> = Object.freeze([
-  ["pc_product_id", "pricecharting"],
-  ["discogs_id", "discogs"],
-  ["tcgplayer_id", "tcgplayer"],
-  ["mercari_id", "mercari"],
-  ["upc", "upc"],
-  ["asin", "asin"],
-  ["epid", "ebay_epid"],
-  ["isbn", "isbn"],
-  ["mpn", "mpn"],
-]);
+import { EXTERNAL_ID_KEYS } from "./external_ids";
 
 export type TierDetection =
   | {
