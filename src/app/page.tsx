@@ -37,7 +37,7 @@ function timeAgo(ts: string | null | undefined) {
 }
 
 export default async function DashboardPage() {
-  const [statusCounts, productCount, lastScan, recentOpps] = await Promise.all([
+  const [statusCounts, productCount, lastScan, recentOpps, actNowDeals] = await Promise.all([
     db
       .select({ status: opportunities.status, count: count() })
       .from(opportunities)
@@ -72,6 +72,30 @@ export default async function DashboardPage() {
       .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
       .orderBy(desc(opportunities.foundAt))
       .limit(8),
+    db
+      .select({
+        id: opportunities.id,
+        listingPriceUsd: opportunities.listingPriceUsd,
+        marketPriceUsd: opportunities.marketPriceUsd,
+        profitUsd: opportunities.profitUsd,
+        marginPct: opportunities.marginPct,
+        status: opportunities.status,
+        foundAt: opportunities.foundAt,
+        productId: opportunities.productId,
+        listingTitle: listings.title,
+        listingUrl: listings.url,
+        marketplaceId: listings.marketplaceId,
+        marketplaceName: marketplaces.name,
+        productTitle: products.title,
+        productPlatform: products.platform,
+      })
+      .from(opportunities)
+      .innerJoin(listings, eq(opportunities.listingId, listings.id))
+      .innerJoin(marketplaces, eq(listings.marketplaceId, marketplaces.id))
+      .leftJoin(products, eq(opportunities.productId, products.id))
+      .where(eq(opportunities.status, "new"))
+      .orderBy(desc(opportunities.marginPct))
+      .limit(5),
   ]);
 
   const byStatus = Object.fromEntries(
@@ -177,6 +201,107 @@ export default async function DashboardPage() {
           </p>
         </div>
       </div>
+
+      {/* Act Now — top 5 urgent deals */}
+      {actNowDeals.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold" style={{ fontFamily: "var(--font-heading)" }}>
+              Act Now
+            </h3>
+            <span className="text-[10px] uppercase tracking-wider" style={{ color: "#8892aa" }}>
+              Top deals by margin
+            </span>
+          </div>
+          <div
+            className="flex gap-4 overflow-x-auto pb-2"
+            style={{ scrollSnapType: "x mandatory" }}
+          >
+            {actNowDeals.map((deal) => {
+              const margin = deal.marginPct * 100;
+              const glowColor =
+                margin > 500 ? "#c084fc" :
+                margin > 100 ? "#34d399" :
+                "#38bdf8";
+              const glowShadow =
+                margin > 500 ? "0 0 20px #c084fc25, inset 0 1px 0 #c084fc20" :
+                margin > 100 ? "0 0 20px #34d39925, inset 0 1px 0 #34d39920" :
+                "0 0 20px #38bdf825, inset 0 1px 0 #38bdf820";
+
+              return (
+                <div
+                  key={deal.id}
+                  className="rounded-lg border p-4 min-w-[260px] max-w-[320px] flex-shrink-0 flex flex-col justify-between"
+                  style={{
+                    scrollSnapAlign: "start",
+                    background: "#131c2e",
+                    borderColor: glowColor + "40",
+                    borderLeftWidth: 3,
+                    borderLeftColor: glowColor,
+                    boxShadow: glowShadow,
+                  }}
+                >
+                  <div>
+                    <Link
+                      href={`/products/${encodeURIComponent(deal.productId)}`}
+                      className="text-sm font-medium block truncate hover:underline"
+                      style={{ color: "#e8ecf4", fontFamily: "var(--font-heading)" }}
+                    >
+                      {deal.productTitle ?? deal.listingTitle}
+                    </Link>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{ background: "#38bdf815", color: "#38bdf8" }}
+                      >
+                        {deal.marketplaceName}
+                      </span>
+                      {deal.productPlatform && (
+                        <span className="text-[10px]" style={{ color: "#8892aa" }}>
+                          {deal.productPlatform}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-3 space-y-1">
+                      <p
+                        className="text-xl font-bold"
+                        style={{
+                          color: "#34d399",
+                          fontFamily: "var(--font-mono)",
+                          textShadow: "0 0 16px #34d39940",
+                        }}
+                      >
+                        {fmt(deal.profitUsd)}
+                      </p>
+                      <p className="text-[11px]" style={{ color: "#34d39990", fontFamily: "var(--font-mono)" }}>
+                        {fmtPct(deal.marginPct)} margin
+                      </p>
+                      <p className="text-[11px]" style={{ color: "#6b7b96", fontFamily: "var(--font-mono)" }}>
+                        {fmt(deal.listingPriceUsd)} → {fmt(deal.marketPriceUsd)}
+                      </p>
+                    </div>
+                  </div>
+                  {deal.listingUrl && (
+                    <a
+                      href={deal.listingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-flex items-center justify-center text-xs font-medium rounded px-3 py-1.5 transition-colors"
+                      style={{
+                        background: glowColor + "20",
+                        color: glowColor,
+                        border: `1px solid ${glowColor}40`,
+                      }}
+                    >
+                      View Deal →
+                    </a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Recent opportunities */}
       <div>

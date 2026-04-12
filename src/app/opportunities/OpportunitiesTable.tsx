@@ -30,6 +30,7 @@ export type PriceComparison = {
 export type OpportunityRow = {
   id: number;
   productId: string;
+  productTypeId: string;
   listingTitle: string;
   productTitle: string;
   productPlatform: string;
@@ -109,9 +110,16 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState("all");
   const [minProfit, setMinProfit] = useState(0);
+  const [filterMarketplace, setFilterMarketplace] = useState("all");
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [minMargin, setMinMargin] = useState(0);
+  const [filterLot, setFilterLot] = useState<"all" | "single" | "lot">("all");
   const [sortCol, setSortCol] = useState<"profit" | "margin" | "found">("found");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [pending, startTransition] = useTransition();
+
+  const allMarketplaces = [...new Set(rows.map((r) => r.marketplaceName))].sort();
+  const allCategories = [...new Set(rows.map((r) => r.productTypeId))].sort();
 
   function handleSort(col: typeof sortCol) {
     if (col === sortCol) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -132,6 +140,10 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
   const filtered = rows
     .filter((r) => filterStatus === "all" || r.status === filterStatus)
     .filter((r) => r.profitUsd >= minProfit)
+    .filter((r) => filterMarketplace === "all" || r.marketplaceName === filterMarketplace)
+    .filter((r) => filterCategory === "all" || r.productTypeId === filterCategory)
+    .filter((r) => minMargin === 0 || r.marginPct * 100 >= minMargin)
+    .filter((r) => filterLot === "all" || (filterLot === "lot" ? r.isLot : !r.isLot))
     .sort((a, b) => {
       const dir = sortDir === "asc" ? 1 : -1;
       if (sortCol === "profit") return dir * (a.profitUsd - b.profitUsd);
@@ -159,6 +171,53 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
         <span className="text-xs text-muted-foreground ml-auto">
           {filtered.length} of {rows.length}
         </span>
+      </div>
+      <div className="flex flex-wrap gap-3 items-center">
+        <select
+          value={filterMarketplace}
+          onChange={(e) => setFilterMarketplace(e.target.value)}
+          style={{ background: "#131c2e", borderColor: "#1e2d4a", color: "#e8ecf4" }}
+          className="text-xs border rounded px-2 py-1"
+        >
+          <option value="all">All marketplaces</option>
+          {allMarketplaces.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value)}
+          style={{ background: "#131c2e", borderColor: "#1e2d4a", color: "#e8ecf4" }}
+          className="text-xs border rounded px-2 py-1"
+        >
+          <option value="all">All categories</option>
+          {allCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <div className="flex items-center gap-1">
+          <label className="text-xs" style={{ color: "#8892aa" }}>Min margin %</label>
+          <input
+            type="number"
+            value={minMargin}
+            min={0}
+            onChange={(e) => setMinMargin(Number(e.target.value))}
+            style={{ background: "#131c2e", borderColor: "#1e2d4a", color: "#e8ecf4" }}
+            className="text-xs border rounded px-2 py-1 w-16"
+          />
+        </div>
+        <div className="flex items-center gap-0.5">
+          {(["all", "single", "lot"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setFilterLot(v)}
+              className="text-[11px] px-2 py-1 rounded transition-colors"
+              style={{
+                background: filterLot === v ? "#34d39920" : "transparent",
+                color: filterLot === v ? "#34d399" : "#8892aa",
+                border: `1px solid ${filterLot === v ? "#34d39940" : "#1e2d4a"}`,
+              }}
+            >
+              {v === "all" ? "All" : v === "single" ? "Single items" : "Lots only"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Table */}
@@ -217,10 +276,45 @@ export function OpportunitiesTable({ rows }: { rows: OpportunityRow[] }) {
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">{fmtPct(row.marginPct)}</TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(row.status)} className="text-xs">{row.status}</Badge>
-                    {row.flags.map((f) => (
-                      <Badge key={f} variant="secondary" className="text-[10px] ml-1">{f}</Badge>
-                    ))}
+                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <Badge variant={statusVariant(row.status)} className="text-xs">{row.status}</Badge>
+                      {row.status !== "reviewed" && (
+                        <button
+                          title="Mark reviewed"
+                          disabled={pending}
+                          onClick={() => updateStatus(row.id, "reviewed")}
+                          className="w-4 h-4 rounded flex items-center justify-center text-[10px] transition-opacity hover:opacity-100"
+                          style={{ opacity: 0.5, color: "#34d399", background: "#34d39915" }}
+                        >
+                          ✓
+                        </button>
+                      )}
+                      {row.status !== "passed" && (
+                        <button
+                          title="Pass"
+                          disabled={pending}
+                          onClick={() => updateStatus(row.id, "passed")}
+                          className="w-4 h-4 rounded flex items-center justify-center text-[10px] transition-opacity hover:opacity-100"
+                          style={{ opacity: 0.5, color: "#fb7185", background: "#fb718515" }}
+                        >
+                          ✕
+                        </button>
+                      )}
+                      {row.status !== "purchased" && (
+                        <button
+                          title="Mark purchased"
+                          disabled={pending}
+                          onClick={() => updateStatus(row.id, "purchased")}
+                          className="w-4 h-4 rounded flex items-center justify-center text-[10px] transition-opacity hover:opacity-100"
+                          style={{ opacity: 0.5, color: "#38bdf8", background: "#38bdf815" }}
+                        >
+                          $
+                        </button>
+                      )}
+                      {row.flags.map((f) => (
+                        <Badge key={f} variant="secondary" className="text-[10px]">{f}</Badge>
+                      ))}
+                    </div>
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground"><TimeAgo ts={row.foundAt} /></TableCell>
                 </TableRow>

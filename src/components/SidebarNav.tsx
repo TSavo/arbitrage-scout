@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -29,7 +30,7 @@ function NavSection({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function NavLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+function NavLink({ href, label, active, badge }: { href: string; label: string; active: boolean; badge?: number }) {
   return (
     <Link
       href={href}
@@ -45,15 +46,36 @@ function NavLink({ href, label, active }: { href: string; label: string; active:
           style={{ background: "#34d399" }}
         />
       )}
-      <span className="group-hover:text-[#34d399] transition-colors duration-150">
+      <span className="group-hover:text-[#34d399] transition-colors duration-150 flex-1">
         {label}
       </span>
+      {badge != null && badge > 0 && (
+        <span
+          className="ml-auto text-[10px] font-medium leading-none rounded-full min-w-[18px] h-[18px] flex items-center justify-center"
+          style={{ background: "#34d399", color: "#0b1120" }}
+        >
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </Link>
   );
 }
 
 export function SidebarNav() {
   const pathname = usePathname();
+  const [newCount, setNewCount] = useState<number>(0);
+
+  useEffect(() => {
+    function fetchCount() {
+      fetch("/api/opportunities/count")
+        .then((r) => r.json())
+        .then((data: { new: number }) => setNewCount(data.new))
+        .catch(() => {});
+    }
+    fetchCount();
+    const interval = setInterval(fetchCount, 30_000);
+    return () => clearInterval(interval);
+  }, []);
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -79,6 +101,7 @@ export function SidebarNav() {
                 href={link.href}
                 label={link.label}
                 active={isActive(link.href)}
+                badge={link.href === "/opportunities" ? newCount : undefined}
               />
             ))}
         </NavSection>

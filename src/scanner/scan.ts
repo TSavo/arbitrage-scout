@@ -13,8 +13,10 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { marketplaces } from "@/db/schema";
 import type { IMarketplaceAdapter, RawListing } from "../sources/IMarketplaceAdapter";
-import { cfg, startScanLog, finishScanLog, buildLlm } from "./helpers";
-import { processListing } from "./processor";
+import { startScanLog, finishScanLog, buildLlm } from "./helpers";
+import { CommandPipeline } from "@/pipeline/pipeline";
+import { toRawListing } from "@/pipeline/utils";
+import { getProductTypeSchema } from "@/pipeline/commands/extract";
 import { checkWatchlistAlerts } from "./watchlist";
 import { log, section, progress, skip, error } from "@/lib/logger";
 
@@ -67,6 +69,13 @@ export async function runScan(
   seedMarketplaces();
 
   const llm = buildLlm(normCfg);
+  const pipeline = new CommandPipeline({
+    minProfitUsd: minProfit,
+    minMarginPct: minMargin,
+    llmUrl: (normCfg["base_url"] as string) ?? process.env.OLLAMA_URL ?? "http://battleaxe:11434",
+    llmModel: (normCfg["model"] as string) ?? process.env.OLLAMA_MODEL ?? "qwen3:8b",
+  });
+  const schema = await getProductTypeSchema();
 
   let totalOpportunities = 0;
 
@@ -119,8 +128,12 @@ export async function runScan(
     for (let i = 0; i < allListings.length; i++) {
       const listing = allListings[i];
       progress(i + 1, allListings.length, `${adapter.marketplace_id} listings`);
-      const opps = await processListing(db, llm, listing, minProfit, minMargin);
-      nOpps += opps;
+      try {
+        const result = await pipeline.processListing(toRawListing(listing), schema, llm ?? undefined);
+        nOpps += result.opportunities.length;
+      } catch (err) {
+        error("scan", `pipeline error on ${listing.marketplace_id}/${listing.listing_id}`, err);
+      }
     }
 
     const rateLimited = !adapter.isAvailable();

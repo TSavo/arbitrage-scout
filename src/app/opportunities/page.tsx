@@ -39,6 +39,7 @@ export default async function OpportunitiesPage() {
       marketplaceName: marketplaces.name,
       productTitle: products.title,
       productPlatform: products.platform,
+      productTypeId: products.productTypeId,
     })
     .from(opportunities)
     .innerJoin(listings, eq(opportunities.listingId, listings.id))
@@ -108,6 +109,7 @@ export default async function OpportunitiesPage() {
   const tableRows: OpportunityRow[] = fullRows.map((r) => ({
     id: r.id,
     productId: r.productId,
+    productTypeId: r.productTypeId ?? "unknown",
     listingTitle: r.listingTitle,
     productTitle: r.productTitle ?? r.listingTitle,
     productPlatform: r.productPlatform ?? "",

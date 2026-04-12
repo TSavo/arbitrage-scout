@@ -16,8 +16,46 @@ export function createTestDb() {
     CREATE TABLE product_types (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      description TEXT,
       condition_schema TEXT NOT NULL DEFAULT '[]',
       metadata_schema TEXT NOT NULL DEFAULT '[]'
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE product_type_fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_type_id TEXT NOT NULL REFERENCES product_types(id),
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      data_type TEXT NOT NULL,
+      pattern TEXT,
+      min_value REAL,
+      max_value REAL,
+      is_integer INTEGER NOT NULL DEFAULT 0,
+      format TEXT,
+      unit TEXT,
+      extract_hint TEXT,
+      is_required INTEGER NOT NULL DEFAULT 0,
+      is_searchable INTEGER NOT NULL DEFAULT 0,
+      search_weight REAL NOT NULL DEFAULT 1.0,
+      is_identifier INTEGER NOT NULL DEFAULT 0,
+      is_pricing_axis INTEGER NOT NULL DEFAULT 0,
+      display_priority INTEGER NOT NULL DEFAULT 100,
+      is_hidden INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(product_type_id, key)
+    )
+  `);
+
+  sqlite.exec(`
+    CREATE TABLE product_type_field_enum_values (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      field_id INTEGER NOT NULL REFERENCES product_type_fields(id) ON DELETE CASCADE,
+      value TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT,
+      display_order INTEGER NOT NULL DEFAULT 100,
+      UNIQUE(field_id, value)
     )
   `);
 
@@ -30,6 +68,7 @@ export function createTestDb() {
       release_date TEXT,
       genre TEXT,
       sales_volume INTEGER NOT NULL DEFAULT 0,
+      metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -50,7 +89,8 @@ export function createTestDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id TEXT NOT NULL REFERENCES products(id),
       source TEXT NOT NULL,
-      condition TEXT NOT NULL,
+      condition TEXT NOT NULL DEFAULT '',
+      dimensions TEXT NOT NULL DEFAULT '{}',
       price_usd REAL NOT NULL,
       recorded_at TEXT NOT NULL,
       UNIQUE(product_id, source, condition, recorded_at)
@@ -175,7 +215,8 @@ export function createTestDb() {
 export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
   const now = new Date().toISOString();
 
-  // Product types
+  // Product types (legacy conditionSchema/metadataSchema left empty — the
+  // DB-driven schema comes from product_type_fields).
   db.insert(schema.productTypes).values({
     id: "retro_game",
     name: "Retro Video Game",
@@ -188,6 +229,111 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
     name: "Pokemon Card",
     conditionSchema: ["loose", "graded"],
     metadataSchema: ["set_name", "card_number"],
+  }).run();
+
+  db.insert(schema.productTypes).values({
+    id: "bourbon",
+    name: "Bourbon",
+    conditionSchema: [],
+    metadataSchema: [],
+  }).run();
+
+  db.insert(schema.productTypes).values({
+    id: "sports_card",
+    name: "Sports Card",
+    conditionSchema: [],
+    metadataSchema: [],
+  }).run();
+
+  // Product type fields (DB-driven schema)
+  const retroCondition = db.insert(schema.productTypeFields).values({
+    productTypeId: "retro_game", key: "condition", label: "Condition",
+    dataType: "string", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: false, displayPriority: 5, isHidden: false,
+  }).returning({ id: schema.productTypeFields.id }).get();
+
+  for (const [i, v] of ["loose", "cib", "new_sealed"].entries()) {
+    db.insert(schema.productTypeFieldEnumValues).values({
+      fieldId: retroCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
+    }).run();
+  }
+
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "retro_game", key: "platform", label: "Platform",
+    dataType: "string", isPricingAxis: false, isSearchable: true,
+    searchWeight: 2, isIdentifier: false, isRequired: false,
+    isInteger: false, displayPriority: 20, isHidden: false,
+  }).run();
+
+  const pokeCondition = db.insert(schema.productTypeFields).values({
+    productTypeId: "pokemon_card", key: "condition", label: "Condition",
+    dataType: "string", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: false, displayPriority: 5, isHidden: false,
+  }).returning({ id: schema.productTypeFields.id }).get();
+  for (const [i, v] of ["loose", "graded"].entries()) {
+    db.insert(schema.productTypeFieldEnumValues).values({
+      fieldId: pokeCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
+    }).run();
+  }
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "pokemon_card", key: "set_name", label: "Set",
+    dataType: "string", isPricingAxis: false, isSearchable: true,
+    searchWeight: 3, isIdentifier: true, isRequired: false,
+    isInteger: false, displayPriority: 10, isHidden: false,
+  }).run();
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "pokemon_card", key: "card_number", label: "Card #",
+    dataType: "string", isPricingAxis: false, isSearchable: true,
+    searchWeight: 3, isIdentifier: true, isRequired: false,
+    isInteger: false, displayPriority: 20, isHidden: false,
+  }).run();
+
+  // Bourbon: no pricing axes, just descriptive fields
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "bourbon", key: "distillery", label: "Distillery",
+    dataType: "string", isPricingAxis: false, isSearchable: true,
+    searchWeight: 3, isIdentifier: false, isRequired: true,
+    isInteger: false, displayPriority: 10, isHidden: false,
+  }).run();
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "bourbon", key: "age", label: "Age",
+    dataType: "number", isPricingAxis: false, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: true, displayPriority: 20, isHidden: false,
+  }).run();
+
+  // Sports card: multi-axis pricing (condition + grade + grading_company)
+  const sportsCondition = db.insert(schema.productTypeFields).values({
+    productTypeId: "sports_card", key: "condition", label: "Condition",
+    dataType: "string", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: false, displayPriority: 5, isHidden: false,
+  }).returning({ id: schema.productTypeFields.id }).get();
+  for (const [i, v] of ["raw", "graded"].entries()) {
+    db.insert(schema.productTypeFieldEnumValues).values({
+      fieldId: sportsCondition.id, value: v, label: v, displayOrder: (i + 1) * 10,
+    }).run();
+  }
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "sports_card", key: "grade", label: "Grade",
+    dataType: "number", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: false, minValue: 1, maxValue: 10,
+    displayPriority: 6, isHidden: false,
+  }).run();
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "sports_card", key: "grading_company", label: "Grading company",
+    dataType: "string", isPricingAxis: true, isSearchable: false,
+    searchWeight: 1, isIdentifier: false, isRequired: false,
+    isInteger: false, displayPriority: 7, isHidden: false,
+  }).run();
+  db.insert(schema.productTypeFields).values({
+    productTypeId: "sports_card", key: "player", label: "Player",
+    dataType: "string", isPricingAxis: false, isSearchable: true,
+    searchWeight: 3, isIdentifier: false, isRequired: true,
+    isInteger: false, displayPriority: 10, isHidden: false,
   }).run();
 
   // Marketplaces
@@ -211,11 +357,27 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
     platform: "Pokemon Darkness Ablaze", salesVolume: 8000, createdAt: now, updatedAt: now,
   }).run();
 
-  // Price points
-  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "loose", priceUsd: 25.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "cib", priceUsd: 45.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-2", source: "pricecharting", condition: "loose", priceUsd: 15.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-3", source: "pricecharting", condition: "loose", priceUsd: 150.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.products).values({
+    id: "pc-bourbon-1", productTypeId: "bourbon", title: "Pappy Van Winkle 23",
+    salesVolume: 100, createdAt: now, updatedAt: now,
+  }).run();
+
+  db.insert(schema.products).values({
+    id: "pc-sports-1", productTypeId: "sports_card", title: "Mickey Mantle 1952 Topps",
+    salesVolume: 500, createdAt: now, updatedAt: now,
+  }).run();
+
+  // Price points — with dimensions JSON populated
+  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 25.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "cib", dimensions: { condition: "cib" }, priceUsd: 45.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.pricePoints).values({ productId: "pc-2", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 15.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.pricePoints).values({ productId: "pc-3", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 150.00, recordedAt: "2026-04-10" }).run();
+  // Bourbon: single price, no pricing axes
+  db.insert(schema.pricePoints).values({ productId: "pc-bourbon-1", source: "secondary", condition: "", dimensions: {}, priceUsd: 3500.00, recordedAt: "2026-04-10" }).run();
+  // Sports card: multiple combos
+  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "raw", dimensions: { condition: "raw" }, priceUsd: 200.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 8, grading_company: "PSA" }, priceUsd: 5000.00, recordedAt: "2026-04-10" }).run();
+  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 9, grading_company: "PSA" }, priceUsd: 25000.00, recordedAt: "2026-04-11" }).run();
 
   return { now };
 }
