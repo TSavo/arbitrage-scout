@@ -10,31 +10,50 @@ import { log, error } from "@/lib/logger";
  * which returns the same dimension so existing stored vectors remain
  * compatible. OpenRouter bills ~$0.00000011 per call — trivial.
  */
+// Circuit breaker: after CB_FAIL_THRESHOLD consecutive Ollama failures, skip
+// Ollama entirely for CB_COOLDOWN_MS. Every failed Ollama attempt was costing
+// 1–3s of wall time before the fallback kicked in; after a few of those in
+// a row it's cheaper to jump straight to OpenRouter until Ollama recovers.
+const CB_FAIL_THRESHOLD = 3;
+const CB_COOLDOWN_MS = 60_000;
+let ollamaConsecutiveFails = 0;
+let ollamaSkipUntil = 0;
+
 async function computeEmbedding(
   text: string,
   ollamaUrl: string,
 ): Promise<number[] | null> {
-  const t0 = Date.now();
-  try {
-    const resp = await cachedFetch(
-      `${ollamaUrl}/api/embed`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
-      },
-      { ttlMs: null, cacheTag: "embed", networkTimeoutMs: 60_000, maxRetries: 1 },
-    );
-    if (resp.ok) {
-      const vec = resp.json<{ embeddings?: number[][] }>().embeddings?.[0];
-      if (vec?.length) {
-        log("embedding", `ollama ok dim=${vec.length} ${Date.now() - t0}ms`);
-        return vec;
+  const now = Date.now();
+  if (now >= ollamaSkipUntil) {
+    const t0 = now;
+    try {
+      const resp = await cachedFetch(
+        `${ollamaUrl}/api/embed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "qwen3-embedding:8b", input: text }),
+        },
+        { ttlMs: null, cacheTag: "embed", networkTimeoutMs: 60_000, maxRetries: 1 },
+      );
+      if (resp.ok) {
+        const vec = resp.json<{ embeddings?: number[][] }>().embeddings?.[0];
+        if (vec?.length) {
+          ollamaConsecutiveFails = 0;
+          log("embedding", `ollama ok dim=${vec.length} ${Date.now() - t0}ms`);
+          return vec;
+        }
       }
+      ollamaConsecutiveFails++;
+      error("embedding", `ollama bad response (${resp.status}) ${Date.now() - t0}ms fails=${ollamaConsecutiveFails}`);
+    } catch (err) {
+      ollamaConsecutiveFails++;
+      error("embedding", `ollama failed after ${Date.now() - t0}ms (${(err as Error).message}) fails=${ollamaConsecutiveFails}`);
     }
-    error("embedding", `ollama bad response (${resp.status}) ${Date.now() - t0}ms — falling back to OpenRouter`);
-  } catch (err) {
-    error("embedding", `ollama failed after ${Date.now() - t0}ms (${(err as Error).message}) — falling back to OpenRouter`);
+    if (ollamaConsecutiveFails >= CB_FAIL_THRESHOLD) {
+      ollamaSkipUntil = Date.now() + CB_COOLDOWN_MS;
+      log("embedding", `ollama circuit opened — skipping for ${CB_COOLDOWN_MS / 1000}s`);
+    }
   }
 
   const orKey = process.env.OPENROUTER_API_KEY;
