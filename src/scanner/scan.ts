@@ -55,6 +55,7 @@ function seedMarketplaces() {
     { id: "discogs", name: "Discogs", baseUrl: "https://www.discogs.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
     { id: "klwines", name: "K&L Wines", baseUrl: "https://www.klwines.com", supportsApi: false },
+    { id: "bittersandbottles", name: "Bitters & Bottles", baseUrl: "https://www.bittersandbottles.com", supportsApi: true },
     { id: "tcgplayer", name: "TCGPlayer", baseUrl: "https://www.tcgplayer.com", supportsApi: true },
     { id: "liveauctioneers", name: "LiveAuctioneers", baseUrl: "https://www.liveauctioneers.com", supportsApi: true },
     { id: "whatnot", name: "Whatnot", baseUrl: "https://www.whatnot.com", supportsApi: false },

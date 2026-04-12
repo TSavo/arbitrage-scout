@@ -17,6 +17,7 @@ import { MercariAdapter } from "./mercari";
 import { LiveAuctioneersAdapter } from "./liveauctioneers";
 import { WhatnotAdapter } from "./whatnot";
 import { KlwinesAdapter } from "./klwines";
+import { BittersAndBottlesAdapter } from "./bittersandbottles";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -53,6 +54,8 @@ export interface AdapterConfig {
   whatnot?: { enabled?: boolean };
   /** K&L Wines — requires a pre-authenticated Chrome session on :9222 (see scripts/klwines_login.ts) */
   klwines?: { enabled?: boolean; userDataDir?: string; cdpPort?: number };
+  /** Bitters & Bottles — Shopify-backed craft spirits store; public products.json, no auth */
+  bittersandbottles?: { enabled?: boolean };
 }
 
 /**
@@ -171,6 +174,15 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     }
   } else {
     log("registry", "KlwinesAdapter skipped (disabled in config)");
+  }
+
+  // Bitters & Bottles — no credentials needed, public Shopify products.json
+  const bbCfg = cfg.bittersandbottles ?? {};
+  if (bbCfg.enabled !== false) {
+    adapters.push(new BittersAndBottlesAdapter());
+    log("registry", "built BittersAndBottlesAdapter (no-auth; Shopify public API)");
+  } else {
+    log("registry", "BittersAndBottlesAdapter skipped (disabled in config)");
   }
 
   log("registry", `buildAdapters complete: ${adapters.length} adapter(s) active [${adapters.map((a) => a.marketplace_id).join(", ")}]`);
