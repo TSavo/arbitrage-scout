@@ -239,78 +239,91 @@ async function classifyOne(item: PipelineItem, config: StageConfig): Promise<Pip
  * previous step's output), but different items can be at different stages
  * of the pipeline concurrently.
  */
-export async function* heavyTailStage(
+export function heavyTailStage(
   source: AsyncIterable<PipelineItem>,
   config: StageConfig,
 ): AsyncIterable<PipelineItem> {
-  for await (const item of source) {
-    if (item.error) { yield item; continue; }
-    if (wasFastPathed(item)) { yield item; continue; }
-    if (!item.extracted || !item.classified || !item.validated) {
-      yield withError(item, "heavy_tail", new Error("missing prior stage output"));
-      continue;
-    }
-    yield await timed("heavy_tail", item, async () => {
-      try {
-        const listing = item.validated!;
-        const cls = item.classified!;
-        const leaf = cls.path[cls.path.length - 1];
+  // parallelMap with N workers — each worker's embedding call funnels
+  // through the per-host mutex (ollama serializeKey), and the SQLite WAL
+  // journal handles concurrent writers cleanly. Concurrency defaults to
+  // llmConcurrency so the whole pipeline scales to the size of the LLM
+  // pool rather than stalling on a serial persist stage.
+  return parallelMap(
+    source,
+    (item) => heavyTailOne(item, config),
+    { concurrency: Math.max(1, config.llmConcurrency ?? 1) },
+  );
+}
 
-        const validatedFields = validateFields({
-          extracted: item.extracted!.fields,
-          schema: cls.accumulatedSchema,
-        });
-
-        const identity = await resolveIdentity({
-          listing,
-          fields: validatedFields.values,
-          node: leaf,
-          schema: cls.accumulatedSchema,
-          ollamaUrl: config.ollamaUrl,
-        });
-
-        const schemaVersion = await taxonomyRepo.getCurrentSchemaVersion();
-        const stored = await persist({
-          listing,
-          product: identity,
-          fields: validatedFields.values,
-          nodeId: leaf.id,
-          schemaVersion,
-          ollamaUrl: config.ollamaUrl,
-          confirmed: identity.method !== "new",
-        });
-
-        await writePricePoint({
-          productId: stored.productId,
-          source: listing.marketplaceId,
-          priceUsd: listing.priceUsd,
-          fields: validatedFields.values,
-          schema: cls.accumulatedSchema,
-        });
-
-        const opps = await evaluateOpportunities({
-          listingDbId: stored.listingId,
-          listingMarketplaceId: listing.marketplaceId,
-          productId: stored.productId,
-          listingPrice: listing.priceUsd,
-          shippingUsd: listing.shippingUsd,
-          node: leaf,
-          schema: cls.accumulatedSchema,
-          fields: validatedFields.values,
-          thresholds: config.thresholds,
-        });
-
-        return withStageResult(
-          withStageResult(item, "persist", "persisted", stored),
-          "evaluate",
-          "opportunitiesFound",
-          opps.length,
-        );
-      } catch (err) {
-        return withError(item, "heavy_tail", err);
-      }
-    });
+async function heavyTailOne(
+  item: PipelineItem,
+  config: StageConfig,
+): Promise<PipelineItem> {
+  if (item.error) return item;
+  if (wasFastPathed(item)) return item;
+  if (!item.extracted || !item.classified || !item.validated) {
+    return withError(item, "heavy_tail", new Error("missing prior stage output"));
   }
+  return timed("heavy_tail", item, async () => {
+    try {
+      const listing = item.validated!;
+      const cls = item.classified!;
+      const leaf = cls.path[cls.path.length - 1];
+
+      const validatedFields = validateFields({
+        extracted: item.extracted!.fields,
+        schema: cls.accumulatedSchema,
+      });
+
+      const identity = await resolveIdentity({
+        listing,
+        fields: validatedFields.values,
+        node: leaf,
+        schema: cls.accumulatedSchema,
+        ollamaUrl: config.ollamaUrl,
+      });
+
+      const schemaVersion = await taxonomyRepo.getCurrentSchemaVersion();
+      const stored = await persist({
+        listing,
+        product: identity,
+        fields: validatedFields.values,
+        nodeId: leaf.id,
+        schemaVersion,
+        ollamaUrl: config.ollamaUrl,
+        confirmed: identity.method !== "new",
+      });
+
+      await writePricePoint({
+        productId: stored.productId,
+        source: listing.marketplaceId,
+        priceUsd: listing.priceUsd,
+        fields: validatedFields.values,
+        schema: cls.accumulatedSchema,
+      });
+
+      const opps = await evaluateOpportunities({
+        listingDbId: stored.listingId,
+        listingMarketplaceId: listing.marketplaceId,
+        productId: stored.productId,
+        listingPrice: listing.priceUsd,
+        shippingUsd: listing.shippingUsd,
+        node: leaf,
+        schema: cls.accumulatedSchema,
+        fields: validatedFields.values,
+        thresholds: config.thresholds,
+      });
+
+      return withStageResult(
+        withStageResult(item, "persist", "persisted", stored),
+        "evaluate",
+        "opportunitiesFound",
+        opps.length,
+      );
+    } catch (err) {
+      return withError(item, "heavy_tail", err);
+    }
+  });
 }
 
 // ── sink / logger ──────────────────────────────────────────────────────────
