@@ -30,6 +30,8 @@ export const EXTERNAL_ID_KEYS: ReadonlyArray<readonly [string, string]> = Object
 
   // Per-store stable SKUs — good for reidentifying the same bottle/card when
   // the marketplace reuses the listing under a new marketplace_listing_id.
+  // klwines_sku covers both auction listing ids (1.99M range) and catalog
+  // product ids (1.1M–1.8M range) — no collision, stored with same type.
   ["klwines_sku", "klwines_sku"],
   ["bb_sku", "bb_sku"],
   ["seelbachs_sku", "seelbachs_sku"],
