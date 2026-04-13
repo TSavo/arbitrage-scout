@@ -50,10 +50,9 @@ const mutexChains = new Map<string, Promise<void>>();
  *  Enforces host-side rate limits by holding the lock past fn completion. */
 const MIN_GAP_MS: Record<string, number> = {
   discogs: 1100, // 1 req/sec documented limit + 100ms buffer
-  // Paid-tier OpenRouter is ~400+ req/min per model; the shared bucket the
-  // free tier had is gone. 100ms gap = 600/min, well under. Revert to 4500
-  // if falling back to :free suffix models.
-  openrouter: 100,
+  // No openrouter gap — paid tier has no shared bucket throttle, and the
+  // pool still serializes per-provider via its own mutex. Re-add 4500ms
+  // gap if falling back to :free suffix models.
   // Shopify-backed retailers have no published rate limit but start
   // throwing 429s when all 7 adapters hit products.json in parallel. 350ms
   // gap = ~170/min per host, well below the threshold we saw trigger 429s.
