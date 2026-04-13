@@ -15,6 +15,9 @@
  * Max depth 10, as a safety rail.
  */
 
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { db } from "@/db/client";
+import { taxonomyExternalRefs } from "@/db/schema";
 import {
   taxonomyRepo,
   type TaxonomyNode,
@@ -78,13 +81,86 @@ type WalkDecision =
   | { readonly type: "not_applicable" }
   | { readonly type: "done" };
 
+/**
+ * Category-hint fastPath. If the listing carries a category from its
+ * adapter (Shopify product_type in categoryRaw, eBay categoryId in
+ * extra.ebay_category_id, PriceCharting category in extra.pc_category),
+ * consult taxonomy_external_refs for a pre-mapped node. Returns the
+ * target node if found — classify() then builds the path via getPath and
+ * skips the LLM walk entirely.
+ *
+ * Confidence ≥ 0.9 only. Lower-confidence refs (root-rollups from the
+ * backfill) land at the wrong depth and would hurt accuracy.
+ */
+async function fastPathByHint(
+  input: ClassifyInput,
+): Promise<{ nodeId: number; source: string; externalId: string } | null> {
+  const lookups: Array<{ source: string; externalId: string }> = [];
+
+  // Shopify adapters put product_type in category_raw. eBay adapters too.
+  if (input.listing.categoryRaw) {
+    const slug = input.listing.categoryRaw
+      .toLowerCase().replace(/[&,'’"]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    if (slug) {
+      lookups.push({ source: "shopify_product_type", externalId: slug });
+    }
+  }
+
+  const extra = (input.listing.extra ?? {}) as Record<string, unknown>;
+  const ebayId = extra.ebay_category_id ?? extra.ebayCategoryId;
+  if (typeof ebayId === "string" || typeof ebayId === "number") {
+    lookups.push({ source: "ebay_us", externalId: String(ebayId) });
+  }
+  const pcCat = extra.pc_category ?? extra.priceCharting_category;
+  if (typeof pcCat === "string") {
+    lookups.push({ source: "pricecharting", externalId: pcCat });
+  }
+
+  for (const { source, externalId } of lookups) {
+    const row = await db.query.taxonomyExternalRefs.findFirst({
+      where: and(
+        eq(taxonomyExternalRefs.source, source),
+        eq(taxonomyExternalRefs.externalId, externalId),
+      ),
+      columns: { nodeId: true, confidence: true },
+      orderBy: [desc(taxonomyExternalRefs.confidence)],
+    });
+    if (row && row.confidence >= 0.9) {
+      return { nodeId: row.nodeId, source, externalId };
+    }
+  }
+  return null;
+}
+
 export async function classify(input: ClassifyInput): Promise<ClassifyResult> {
   const growth = input.growthService ?? schemaGrowthService;
   const events: GrowthEvent[] = [];
 
+  // Category-hint fastPath — skip the LLM walk entirely when the listing
+  // carries a known category we've mapped in taxonomy_external_refs.
+  const hint = await fastPathByHint(input);
+  if (hint) {
+    const pathNodes = await taxonomyRepo.getPath(hint.nodeId);
+    const leaf = pathNodes[pathNodes.length - 1];
+    await taxonomyRepo.incrementObservation(leaf.id);
+    const accumulated = await taxonomyRepo.getAccumulatedSchema(leaf.id);
+    log(
+      "classify",
+      `hint fastPath: ${hint.source}="${hint.externalId}" → ${leaf.pathCache}`,
+    );
+    return Object.freeze({
+      path: Object.freeze(pathNodes),
+      accumulatedSchema: accumulated,
+      growthEvents: Object.freeze([] as GrowthEvent[]),
+      usedLlm: false,
+    });
+  }
+
   const root = await taxonomyRepo.getRoot();
   const path: TaxonomyNode[] = [root];
   let usedLlm = false;
+  // keep inArray reference bound for any downstream drizzle usage
+  void inArray;
 
   // A listing at root gets incremented too — root is the universal ancestor.
   await taxonomyRepo.incrementObservation(root.id);

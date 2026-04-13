@@ -13,6 +13,7 @@
  */
 
 import { cachedFetch } from "@/lib/cached_fetch";
+import { httpCacheRepo } from "@/db/repos/HttpCacheRepo";
 import { log, error as logError } from "@/lib/logger";
 
 export interface LlmClient {
@@ -57,8 +58,9 @@ class Provider implements LlmClient {
   async generateJson(prompt: string, opts: { system?: string } = {}): Promise<unknown> {
     this._inFlight++;
     try {
-      const body = this.cfg.buildBody(prompt, opts.system);
-      const resp = await cachedFetch(
+      const bodyObj = this.cfg.buildBody(prompt, opts.system);
+      const reqBody = JSON.stringify(bodyObj);
+      const fetchOne = (ttlMs: number | null) => cachedFetch(
         this.cfg.url,
         {
           method: "POST",
@@ -66,20 +68,39 @@ class Provider implements LlmClient {
             "Content-Type": "application/json",
             ...(this.cfg.headers ?? {}),
           },
-          body: JSON.stringify(body),
+          body: reqBody,
         },
         {
-          ttlMs: null,
+          ttlMs,
           cacheTag: `llm:${this.name}`,
           serializeKey: this.cfg.serializeKey,
         },
       );
+      let resp = await fetchOne(null);
       if (!resp.ok) {
         throw new Error(`${this.name} HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
       }
-      const data = resp.json<unknown>();
-      const text = this.cfg.extractText(data);
-      return parseJsonBlob(text);
+      try {
+        const data = resp.json<unknown>();
+        const text = this.cfg.extractText(data);
+        return parseJsonBlob(text);
+      } catch (err) {
+        if (!resp.fromCache) throw err;
+        // Cached response is unparseable (truncated/garbage) — invalidate
+        // and retry once, bypassing cache. Only caches success (2xx).
+        logError(
+          "llm-pool",
+          `${this.name} cached response unparseable (${(err as Error).message.slice(0, 60)}) — invalidating and refetching`,
+        );
+        await httpCacheRepo.invalidate({ method: "POST", url: this.cfg.url, body: reqBody });
+        resp = await fetchOne(0);
+        if (!resp.ok) {
+          throw new Error(`${this.name} HTTP ${resp.status}: ${resp.body.slice(0, 200)}`);
+        }
+        const data = resp.json<unknown>();
+        const text = this.cfg.extractText(data);
+        return parseJsonBlob(text);
+      }
     } finally {
       this._inFlight--;
     }

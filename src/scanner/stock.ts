@@ -54,7 +54,7 @@ const CSV_TAXONOMY_PATH: Record<string, string> = {
   onepiece: "/collectibles/trading_cards/one_piece",
   funko: "/collectibles/figures/funko_pop",
   lego: "/toys_games/building_sets/lego",
-  comics: "/collectibles/comics",
+  comics: "/collectibles/comic_books",
   coins: "/collectibles/coins",
 };
 

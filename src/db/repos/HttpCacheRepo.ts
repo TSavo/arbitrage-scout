@@ -100,6 +100,11 @@ export class HttpCacheRepo {
       });
   }
 
+  async invalidate(key: CacheLookupKey): Promise<void> {
+    const fp = fingerprint(key);
+    await db.delete(httpCache).where(eq(httpCache.fingerprint, fp));
+  }
+
   async purgeExpired(): Promise<number> {
     const nowIso = new Date().toISOString();
     const res = await db

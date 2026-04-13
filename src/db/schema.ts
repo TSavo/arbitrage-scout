@@ -86,6 +86,25 @@ export const taxonomyNodeFieldEnumValues = sqliteTable(
   (t) => [uniqueIndex("uq_taxonomy_field_enum_value").on(t.fieldId, t.value)],
 );
 
+export const taxonomyExternalRefs = sqliteTable(
+  "taxonomy_external_refs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    nodeId: integer("node_id")
+      .notNull()
+      .references(() => taxonomyNodes.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    externalId: text("external_id").notNull(),
+    externalPath: text("external_path"),
+    confidence: real("confidence").notNull().default(1.0),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_taxonomy_external_refs").on(t.nodeId, t.source),
+    index("ix_taxonomy_external_refs_lookup").on(t.source, t.externalId),
+  ],
+);
+
 export const schemaVersions = sqliteTable(
   "schema_versions",
   {

@@ -161,6 +161,25 @@ sqlite.exec(`
 `);
 sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_field_enum_value ON taxonomy_node_field_enum_values(field_id, value)`);
 
+// Cross-references from our taxonomy nodes to external taxonomies. One row
+// per (node, source) — a single node can map to Google GPT, eBay US, Amazon
+// browse, Shopify product_type, etc. simultaneously. The (source, external_id)
+// index makes reverse lookup cheap for fastPath: given an eBay category_id in
+// a listing, find our node without running classify.
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS taxonomy_external_refs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id INTEGER NOT NULL REFERENCES taxonomy_nodes(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    external_path TEXT,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL
+  )
+`);
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_external_refs ON taxonomy_external_refs(node_id, source)`);
+sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_taxonomy_external_refs_lookup ON taxonomy_external_refs(source, external_id)`);
+
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS schema_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
