@@ -228,16 +228,22 @@ export function buildLlm(normCfg: Record<string, unknown>): LlmClient | null {
 
   const orKey = process.env.OPENROUTER_API_KEY;
   if (orKey) {
-    // Defaults are models that actually responded in testing: gpt-oss-120b
-    // (best reasoning), minimax-m2.5 (fast quality), gpt-oss-20b (smaller/
-    // faster fallback). Override with OPENROUTER_MODELS env.
-    const models = (process.env.OPENROUTER_MODELS ??
-      "openai/gpt-oss-120b:free,minimax/minimax-m2.5:free,openai/gpt-oss-20b:free")
-      .split(",")
-      .map((m) => m.trim())
-      .filter(Boolean);
+    const models = (process.env.OPENROUTER_MODELS ?? "openai/gpt-oss-120b,openai/gpt-oss-20b")
+      .split(",").map((m) => m.trim()).filter(Boolean);
+    // Fan out to N distinct mutex slots per model so paid-tier parallelism
+    // isn't collapsed into one lane by a shared serializeKey. Default 10.
+    const parallelPerModel = Math.max(1, parseInt(process.env.OPENROUTER_PARALLEL ?? "10", 10));
     for (const m of models) {
-      providers.push(openRouterProvider({ apiKey: orKey, model: m }));
+      for (let slot = 0; slot < parallelPerModel; slot++) {
+        providers.push(
+          openRouterProvider({
+            apiKey: orKey,
+            model: m,
+            name: `openrouter:${m}#${slot}`,
+            serializeKey: `openrouter:${m}:${slot}`,
+          }),
+        );
+      }
     }
   }
 
