@@ -1,0 +1,442 @@
+import {
+  pgTable,
+  text,
+  integer,
+  boolean,
+  real,
+  jsonb,
+  serial,
+  vector,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
+
+// ── Taxonomy (DB-driven hierarchical product tree) ───────────────────
+
+export const taxonomyNodes = pgTable(
+  "taxonomy_nodes",
+  {
+    id: serial("id").primaryKey(),
+    parentId: integer("parent_id"),
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    description: text("description"),
+    gptId: text("gpt_id"),
+    pathCache: text("path_cache").notNull(),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+    canonical: boolean("canonical").notNull().default(false),
+    observationCount: integer("observation_count").notNull().default(0),
+    lastObservedAt: text("last_observed_at"),
+  },
+  (t) => [
+    uniqueIndex("uq_taxonomy_parent_slug").on(t.parentId, t.slug),
+    index("ix_taxonomy_parent").on(t.parentId),
+    index("ix_taxonomy_path").on(t.pathCache),
+    index("ix_taxonomy_canonical").on(t.canonical),
+  ],
+);
+
+export const taxonomyNodeFields = pgTable(
+  "taxonomy_node_fields",
+  {
+    id: serial("id").primaryKey(),
+    nodeId: integer("node_id")
+      .notNull()
+      .references(() => taxonomyNodes.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    dataType: text("data_type").notNull(),
+    pattern: text("pattern"),
+    minValue: real("min_value"),
+    maxValue: real("max_value"),
+    isInteger: boolean("is_integer").notNull().default(false),
+    format: text("format"),
+    unit: text("unit"),
+    extractHint: text("extract_hint"),
+    isRequired: boolean("is_required").notNull().default(false),
+    isSearchable: boolean("is_searchable").notNull().default(false),
+    searchWeight: real("search_weight").notNull().default(1.0),
+    isIdentifier: boolean("is_identifier").notNull().default(false),
+    isPricingAxis: boolean("is_pricing_axis").notNull().default(false),
+    displayPriority: integer("display_priority").notNull().default(100),
+    isHidden: boolean("is_hidden").notNull().default(false),
+    canonical: boolean("canonical").notNull().default(false),
+    observationCount: integer("observation_count").notNull().default(0),
+    createdAt: text("created_at").notNull(),
+    createdBy: text("created_by").notNull(),
+  },
+  (t) => [
+    uniqueIndex("uq_taxonomy_node_field_key").on(t.nodeId, t.key),
+    index("ix_taxonomy_node_field_node").on(t.nodeId),
+    index("ix_taxonomy_node_field_pricing_axis").on(t.isPricingAxis),
+    index("ix_taxonomy_node_field_identifier").on(t.isIdentifier),
+    index("ix_taxonomy_node_field_searchable").on(t.isSearchable),
+  ],
+);
+
+export const taxonomyNodeFieldEnumValues = pgTable(
+  "taxonomy_node_field_enum_values",
+  {
+    id: serial("id").primaryKey(),
+    fieldId: integer("field_id")
+      .notNull()
+      .references(() => taxonomyNodeFields.id, { onDelete: "cascade" }),
+    value: text("value").notNull(),
+    label: text("label").notNull(),
+    description: text("description"),
+    displayOrder: integer("display_order").notNull().default(100),
+  },
+  (t) => [uniqueIndex("uq_taxonomy_field_enum_value").on(t.fieldId, t.value)],
+);
+
+export const schemaVersions = pgTable(
+  "schema_versions",
+  {
+    id: serial("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    nodeId: integer("node_id"),
+    fieldId: integer("field_id"),
+    payload: jsonb("payload")
+      .notNull()
+      .$type<Record<string, unknown>>()
+      .default({}),
+    triggeredBy: text("triggered_by").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [
+    index("ix_schema_versions_created").on(t.createdAt),
+    index("ix_schema_versions_node").on(t.nodeId),
+  ],
+);
+
+// ── Products ─────────────────────────────────────────────────────────
+
+export const products = pgTable(
+  "products",
+  {
+    id: text("id").primaryKey(),
+    taxonomyNodeId: integer("taxonomy_node_id"),
+    extractedSchemaVersion: integer("extracted_schema_version"),
+    title: text("title").notNull(),
+    platform: text("platform"),
+    releaseDate: text("release_date"),
+    genre: text("genre"),
+    salesVolume: integer("sales_volume").notNull().default(0),
+    /** DB-driven metadata keyed by taxonomy_node_fields.key. */
+    metadata: jsonb("metadata")
+      .notNull()
+      .$type<Record<string, unknown>>()
+      .default({}),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("ix_products_taxonomy_node").on(table.taxonomyNodeId),
+  ],
+);
+
+// ── Product Identifiers ──────────────────────────────────────────────
+
+export const productIdentifiers = pgTable(
+  "product_identifiers",
+  {
+    id: serial("id").primaryKey(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    identifierType: text("identifier_type").notNull(),
+    identifierValue: text("identifier_value").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_identifiers").on(
+      table.productId,
+      table.identifierType,
+      table.identifierValue,
+    ),
+    index("ix_identifiers_lookup").on(
+      table.identifierType,
+      table.identifierValue,
+    ),
+  ],
+);
+
+// ── Price Points ─────────────────────────────────────────────────────
+
+export const pricePoints = pgTable(
+  "price_points",
+  {
+    id: serial("id").primaryKey(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    source: text("source").notNull(),
+    /** @deprecated — kept for back-compat. Prefer `dimensions`. */
+    condition: text("condition").notNull().default(""),
+    /** JSON of pricing-axis field values (e.g. {condition:"loose"}, or {} for bourbon). */
+    dimensions: jsonb("dimensions")
+      .notNull()
+      .$type<Record<string, unknown>>()
+      .default({}),
+    priceUsd: real("price_usd").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_price_points").on(
+      table.productId,
+      table.source,
+      table.condition,
+      table.recordedAt,
+    ),
+    index("ix_price_points_product_date").on(
+      table.productId,
+      table.recordedAt,
+    ),
+    index("ix_price_points_latest").on(
+      table.productId,
+      table.source,
+      table.condition,
+    ),
+  ],
+);
+
+// ── Marketplaces ─────────────────────────────────────────────────────
+
+export const marketplaces = pgTable("marketplaces", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  baseUrl: text("base_url").notNull().default(""),
+  supportsApi: boolean("supports_api").notNull().default(false),
+});
+
+// ── Listings ─────────────────────────────────────────────────────────
+
+export const listings = pgTable(
+  "listings",
+  {
+    id: serial("id").primaryKey(),
+    marketplaceId: text("marketplace_id")
+      .notNull()
+      .references(() => marketplaces.id),
+    marketplaceListingId: text("marketplace_listing_id").notNull(),
+    url: text("url"),
+    title: text("title").notNull(),
+    description: text("description"),
+    priceUsd: real("price_usd").notNull(),
+    shippingUsd: real("shipping_usd").notNull().default(0),
+    seller: text("seller"),
+    isLot: boolean("is_lot").notNull().default(false),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+  },
+  (table) => [
+    uniqueIndex("uq_listings").on(
+      table.marketplaceId,
+      table.marketplaceListingId,
+    ),
+    index("ix_listings_active").on(table.marketplaceId, table.isActive),
+  ],
+);
+
+// ── Listing Items ────────────────────────────────────────────────────
+
+export const listingItems = pgTable(
+  "listing_items",
+  {
+    id: serial("id").primaryKey(),
+    listingId: integer("listing_id")
+      .notNull()
+      .references(() => listings.id),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    quantity: integer("quantity").notNull().default(1),
+    condition: text("condition").notNull().default("loose"),
+    conditionDetails: jsonb("condition_details")
+      .notNull()
+      .$type<Record<string, unknown>>()
+      .default({}),
+    estimatedValueUsd: real("estimated_value_usd"),
+    confidence: real("confidence").notNull().default(0),
+    confirmed: boolean("confirmed").notNull().default(false),
+    rawExtraction: jsonb("raw_extraction")
+      .$type<Record<string, unknown>>()
+      .default({}),
+  },
+  (table) => [
+    index("ix_listing_items_listing").on(table.listingId),
+    index("ix_listing_items_product").on(table.productId),
+    uniqueIndex("uq_listing_items").on(table.listingId, table.productId),
+  ],
+);
+
+// ── Opportunities ────────────────────────────────────────────────────
+
+export const opportunities = pgTable(
+  "opportunities",
+  {
+    id: serial("id").primaryKey(),
+    listingId: integer("listing_id")
+      .notNull()
+      .references(() => listings.id),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    listingPriceUsd: real("listing_price_usd").notNull(),
+    marketPriceUsd: real("market_price_usd").notNull(),
+    marketPriceSource: text("market_price_source").notNull(),
+    marketPriceCondition: text("market_price_condition").notNull(),
+    profitUsd: real("profit_usd").notNull(),
+    marginPct: real("margin_pct").notNull(),
+    feesUsd: real("fees_usd").notNull().default(0),
+    confidence: real("confidence").notNull().default(0),
+    flags: jsonb("flags")
+      .notNull()
+      .$type<string[]>()
+      .default([]),
+    status: text("status").notNull().default("new"),
+    foundAt: text("found_at").notNull(),
+    reviewedAt: text("reviewed_at"),
+    notes: text("notes"),
+    buyPriceUsd: real("buy_price_usd"),
+    salePriceUsd: real("sale_price_usd"),
+    saleDate: text("sale_date"),
+    actualFeesUsd: real("actual_fees_usd"),
+    potentialProfitUsd: real("potential_profit_usd"),
+    potentialMarginPct: real("potential_margin_pct"),
+  },
+  (table) => [
+    index("ix_opportunities_status").on(table.status, table.foundAt),
+    uniqueIndex("uq_opportunities_listing_product").on(table.listingId, table.productId),
+  ],
+);
+
+// ── Inventory Items (bottles the user owns) ─────────────────────────
+
+export const inventoryItems = pgTable(
+  "inventory_items",
+  {
+    id: serial("id").primaryKey(),
+    /** Canonical product row. Nullable when we have the source SKU but
+     *  haven't been able to resolve it to a product yet — backfilled
+     *  automatically when a marketplace scan links the sku to a product. */
+    productId: text("product_id").references(() => products.id),
+    /** Marketplace the bottle was purchased from. */
+    source: text("source").notNull(),
+    /** Source-specific stable identifier (e.g. klwines_sku) for post-hoc
+     *  linking if productId is null at insert time. */
+    sourceSku: text("source_sku"),
+    /** Source-specific order / receipt id. */
+    sourceOrderId: text("source_order_id"),
+    /** Raw title from the receipt — kept verbatim for debugging. */
+    title: text("title").notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    purchasePriceUsd: real("purchase_price_usd"),
+    purchaseDate: text("purchase_date"),
+    importedAt: text("imported_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_inventory_source_order_sku").on(
+      table.source,
+      table.sourceOrderId,
+      table.sourceSku,
+    ),
+    index("ix_inventory_product").on(table.productId),
+    index("ix_inventory_source_sku").on(table.source, table.sourceSku),
+  ],
+);
+
+// ── Watchlist Items ─────────────────────────────────────────────────
+
+export const watchlistItems = pgTable(
+  "watchlist_items",
+  {
+    id: serial("id").primaryKey(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id),
+    targetPricePct: real("target_price_pct").notNull(), // e.g. 20 = alert when 20% below market
+    condition: text("condition").notNull().default("loose"),
+    createdAt: text("created_at").notNull(),
+    triggeredAt: text("triggered_at"),
+    active: boolean("active").notNull().default(true),
+    notes: text("notes"),
+  },
+  (table) => [
+    index("ix_watchlist_active").on(table.active, table.productId),
+  ],
+);
+
+// ── Embeddings (polymorphic metadata) ────────────────────────────────
+
+export const embeddings = pgTable(
+  "embeddings",
+  {
+    id: serial("id").primaryKey(),
+    entityType: text("entity_type").notNull(), // "product" | "listing" | etc
+    entityId: text("entity_id").notNull(),
+    embeddedAt: text("embedded_at").notNull(),
+    // Vector data lives in vec_embeddings (pgvector), not here.
+  },
+  (table) => [
+    uniqueIndex("uq_embeddings_entity").on(table.entityType, table.entityId),
+    index("ix_embeddings_type").on(table.entityType),
+  ],
+);
+
+// ── Vector Embeddings (pgvector) ─────────────────────────────────────
+// Native pgvector table; replaces the sqlite-vec virtual table of the
+// same name. Dimensionality matches the existing llama3-embeddings model.
+
+export const vecEmbeddings = pgTable(
+  "vec_embeddings",
+  {
+    id: serial("id").primaryKey(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    embedding: vector("embedding", { dimensions: 4096 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_vec_embeddings_entity").on(table.entityType, table.entityId),
+    index("ix_vec_embeddings_type").on(table.entityType),
+  ],
+);
+
+// ── HTTP Cache (durable response cache for all outbound API calls) ──
+
+export const httpCache = pgTable(
+  "http_cache",
+  {
+    id: serial("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull(), // sha256(method|url|bodyHash)
+    method: text("method").notNull(),
+    url: text("url").notNull(),
+    bodyHash: text("body_hash").notNull(), // "-" for no body
+    status: integer("status").notNull(),
+    responseBody: text("response_body").notNull(),
+    contentType: text("content_type"),
+    fetchedAt: text("fetched_at").notNull(),
+    expiresAt: text("expires_at"), // null = never expires
+    hits: integer("hits").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("uq_http_cache_fp").on(table.fingerprint),
+    index("ix_http_cache_url").on(table.url),
+    index("ix_http_cache_expires").on(table.expiresAt),
+  ],
+);
+
+// ── Scan Logs ────────────────────────────────────────────────────────
+
+export const scanLogs = pgTable("scan_logs", {
+  id: serial("id").primaryKey(),
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  marketplaceId: text("marketplace_id").references(() => marketplaces.id),
+  queriesRun: integer("queries_run").notNull().default(0),
+  listingsFound: integer("listings_found").notNull().default(0),
+  opportunitiesFound: integer("opportunities_found").notNull().default(0),
+  rateLimited: boolean("rate_limited").notNull().default(false),
+  error: text("error"),
+});
