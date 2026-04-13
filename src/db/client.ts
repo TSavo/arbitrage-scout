@@ -214,6 +214,10 @@ sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_source_order_sku ON 
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_inventory_product ON inventory_items(product_id)`);
 sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_inventory_source_sku ON inventory_items(source, source_sku)`);
 
+// Listings: auction end_time column (idempotent)
+try { sqlite.exec(`ALTER TABLE listings ADD COLUMN end_time TEXT`); } catch {}
+try { sqlite.exec(`CREATE INDEX IF NOT EXISTS ix_listings_end_time ON listings(end_time)`); } catch {}
+
 // Products: taxonomy link + extraction watermark (idempotent)
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN taxonomy_node_id INTEGER`); } catch {}
 try { sqlite.exec(`ALTER TABLE products ADD COLUMN extracted_schema_version INTEGER`); } catch {}

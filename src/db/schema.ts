@@ -227,6 +227,10 @@ export const listings = sqliteTable(
     firstSeenAt: text("first_seen_at").notNull(),
     lastSeenAt: text("last_seen_at").notNull(),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    /** Auction close time (ISO string or raw "End Date" text from the
+     *  source). Null for fixed-price listings. Used to distinguish
+     *  in-progress bids from hammered finals. */
+    endTime: text("end_time"),
   },
   (table) => [
     uniqueIndex("uq_listings").on(
@@ -234,6 +238,7 @@ export const listings = sqliteTable(
       table.marketplaceListingId,
     ),
     index("ix_listings_active").on(table.marketplaceId, table.isActive),
+    index("ix_listings_end_time").on(table.endTime),
   ],
 );
 

@@ -229,6 +229,7 @@ export const listings = pgTable(
     firstSeenAt: text("first_seen_at").notNull(),
     lastSeenAt: text("last_seen_at").notNull(),
     isActive: boolean("is_active").notNull().default(true),
+    endTime: text("end_time"),
   },
   (table) => [
     uniqueIndex("uq_listings").on(
@@ -236,6 +237,7 @@ export const listings = pgTable(
       table.marketplaceListingId,
     ),
     index("ix_listings_active").on(table.marketplaceId, table.isActive),
+    index("ix_listings_end_time").on(table.endTime),
   ],
 );
 

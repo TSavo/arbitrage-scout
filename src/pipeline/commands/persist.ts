@@ -66,6 +66,9 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
         seller: input.listing.seller ?? null,
         lastSeenAt: now,
         isActive: true,
+        // Backfill end_time on every scan — auctions' end times are stable
+        // once set but the column may be null from pre-feature listings.
+        ...(input.listing.endTime ? { endTime: input.listing.endTime } : {}),
       })
       .where(eq(listings.id, existingListing.id));
     listingDbId = existingListing.id;
@@ -85,6 +88,7 @@ export async function persist(input: PersistInput): Promise<PersistResult> {
         firstSeenAt: now,
         lastSeenAt: now,
         isActive: true,
+        endTime: input.listing.endTime ?? null,
       })
       .returning({ id: listings.id });
     listingDbId = inserted[0].id;
