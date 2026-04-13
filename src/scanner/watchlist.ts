@@ -5,7 +5,7 @@
  * met by an existing listing, and marks them as triggered.
  */
 
-import { and, eq, isNull, lte, desc, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, desc } from "drizzle-orm";
 import { db } from "@/db/client";
 import { watchlistItems, pricePoints, listings, listingItems } from "@/db/schema";
 import { log } from "@/lib/logger";
@@ -14,9 +14,9 @@ import { log } from "@/lib/logger";
  * Check all active watchlist items against current listings.
  * Returns the number of newly triggered alerts.
  */
-export function checkWatchlistAlerts(): number {
+export async function checkWatchlistAlerts(): Promise<number> {
   // Step 1: get all active, non-triggered watchlist items
-  const candidates = db
+  const candidates = await db
     .select({
       id: watchlistItems.id,
       productId: watchlistItems.productId,
@@ -29,8 +29,7 @@ export function checkWatchlistAlerts(): number {
         eq(watchlistItems.active, true),
         isNull(watchlistItems.triggeredAt),
       ),
-    )
-    .all();
+    );
 
   if (!candidates.length) {
     log("watchlist", "no active watchlist items to check");
@@ -44,7 +43,7 @@ export function checkWatchlistAlerts(): number {
 
   for (const c of candidates) {
     // Get latest market price for this product + condition
-    const latestPrice = db
+    const latestPrice = await db
       .select({ priceUsd: pricePoints.priceUsd })
       .from(pricePoints)
       .where(
@@ -54,8 +53,7 @@ export function checkWatchlistAlerts(): number {
         ),
       )
       .orderBy(desc(pricePoints.recordedAt))
-      .limit(1)
-      .all();
+      .limit(1);
 
     const marketPrice = latestPrice[0]?.priceUsd ?? null;
 
@@ -70,7 +68,7 @@ export function checkWatchlistAlerts(): number {
     const threshold = marketPrice * (1 - c.targetPricePct / 100);
 
     // Check for a matching listing below threshold
-    const match = db
+    const match = await db
       .select({
         id: listings.id,
         priceUsd: listings.priceUsd,
@@ -85,14 +83,12 @@ export function checkWatchlistAlerts(): number {
           lte(listings.priceUsd, threshold),
         ),
       )
-      .limit(1)
-      .all();
+      .limit(1);
 
     if (match.length > 0) {
-      db.update(watchlistItems)
+      await db.update(watchlistItems)
         .set({ triggeredAt: now })
-        .where(eq(watchlistItems.id, c.id))
-        .run();
+        .where(eq(watchlistItems.id, c.id));
       triggered++;
       log(
         "watchlist",

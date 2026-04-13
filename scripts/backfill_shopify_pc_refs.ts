@@ -81,6 +81,46 @@ const SHOPIFY_MAP: Record<string, string> = {
   "Computer": "/electronics/computers/laptops",
   "Wearable": "/electronics/wearables",
   "Hearable": "/electronics/audio/headphones",
+
+  // Home audio (upscaleaudio)
+  "Cartridges": "/electronics/audio/home_audio/cartridges",
+  "Floorstanding Loudspeakers": "/electronics/audio/home_audio/speakers_floorstanding",
+  "Bookshelf Loudspeakers": "/electronics/audio/home_audio/speakers_bookshelf",
+  "Phonostages": "/electronics/audio/home_audio/phonostages",
+  "Turntables": "/electronics/audio/home_audio/turntables",
+  "Tonearms": "/electronics/audio/home_audio/tonearms",
+  "Integrated Amplifiers (Solid State)": "/electronics/audio/home_audio/amplifiers_integrated",
+  "Integrated Amplifiers (Tube)": "/electronics/audio/home_audio/amplifiers_integrated",
+  "Preamplifiers (Solid State)": "/electronics/audio/home_audio/preamplifiers",
+  "Disc Players": "/electronics/audio/home_audio/disc_players",
+
+  // Knives (atlanticknife)
+  "FOLDING KNIFE": "/hardware/tools/hand_tools/knives/folding_knives",
+  "Folding Knife": "/hardware/tools/hand_tools/knives/folding_knives",
+  "FIXED BLADE": "/hardware/tools/hand_tools/knives/fixed_blade_knives",
+  "Fixed Blade": "/hardware/tools/hand_tools/knives/fixed_blade_knives",
+  "FLASHLIGHTS & HEADLAMPS": "/hardware/tools/flashlights_edc",
+
+  // Watches / straps (watchgecko)
+  "Watch Straps": "/apparel_accessories/jewelry/watch_accessories/watch_straps",
+  "Watch Strap Sets": "/apparel_accessories/jewelry/watch_accessories/watch_straps",
+  "Buckles, Tools & Accessories": "/apparel_accessories/jewelry/watch_accessories/watch_tools",
+
+  // Sneakers (sneakerpolitics)
+  "Sneakers": "/apparel_accessories/footwear/sneakers",
+
+  // Guitars (wildwoodguitars / chicagomusicexchange)
+  "Guitars": "/arts_entertainment/hobbies_creative_arts/musical_instruments/electric_guitars",
+  "Electric Guitars / Solid Body": "/arts_entertainment/hobbies_creative_arts/musical_instruments/electric_guitars",
+  "Electric Guitars / Hollow Body": "/arts_entertainment/hobbies_creative_arts/musical_instruments/electric_guitars",
+  "Electric Guitars / Semi-Hollow": "/arts_entertainment/hobbies_creative_arts/musical_instruments/electric_guitars",
+  "Acoustic Guitars / Dreadnought": "/arts_entertainment/hobbies_creative_arts/musical_instruments/acoustic_guitars",
+  "Acoustic Guitars / OM and Auditorium": "/arts_entertainment/hobbies_creative_arts/musical_instruments/acoustic_guitars",
+  "Acoustic Guitars / Concert": "/arts_entertainment/hobbies_creative_arts/musical_instruments/acoustic_guitars",
+  "Bass Guitars / 4-String": "/arts_entertainment/hobbies_creative_arts/musical_instruments/bass_guitars",
+  "Amps / Guitar Amps / Guitar Cabinets": "/arts_entertainment/hobbies_creative_arts/musical_instruments/guitar_amps",
+  "Effects and Pedals / Overdrive and Boost": "/arts_entertainment/hobbies_creative_arts/musical_instruments/effects_pedals",
+  "Effects and Pedals / Controllers, Volume and Expression": "/arts_entertainment/hobbies_creative_arts/musical_instruments/effects_pedals",
 };
 
 // PriceCharting CSV category → our node path. Kept in sync with

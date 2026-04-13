@@ -19,7 +19,7 @@ function shortPath(path: string): string {
 export default async function PlatformsPage() {
   let platforms: PlatformProfile[] = [];
   try {
-    platforms = profilePlatforms({ minProducts: 30 });
+    platforms = await profilePlatforms({ minProducts: 30 });
   } catch {
     // Tables might not exist yet
   }

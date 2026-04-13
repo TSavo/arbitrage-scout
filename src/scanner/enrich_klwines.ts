@@ -320,7 +320,7 @@ export async function enrichKlwines(): Promise<{
 }> {
   section("ENRICH-KLWINES — valuing inventory from shop.klwines.com");
 
-  const rows = db
+  const rows = await db
     .select({
       id: inventoryItems.id,
       sku: inventoryItems.sourceSku,
@@ -336,8 +336,7 @@ export async function enrichKlwines(): Promise<{
       ),
     )
     .orderBy(sql`RANDOM()`)
-    .limit(Number(process.env.ENRICH_LIMIT) || 100_000)
-    .all();
+    .limit(Number(process.env.ENRICH_LIMIT) || 100_000);
 
   log("enrich-kl", `${rows.length} inventory rows with klwines SKU`);
 

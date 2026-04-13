@@ -31,7 +31,7 @@ export async function verifyOpportunityUrls(opts: {
   section("VERIFY OPPORTUNITY URLS");
 
   // Get active opportunities with URLs
-  const opps = db
+  const opps = await db
     .select({
       oppId: opportunities.id,
       listingId: opportunities.listingId,
@@ -49,8 +49,7 @@ export async function verifyOpportunityUrls(opts: {
         ...(opts.marketplaceId ? [eq(listings.marketplaceId, opts.marketplaceId)] : []),
       ),
     )
-    .limit(opts.limit ?? 100)
-    .all();
+    .limit(opts.limit ?? 100);
 
   const toCheck = opps.filter((o) => o.url);
   log("verify", `${toCheck.length} opportunities to verify`);
@@ -77,7 +76,7 @@ export async function verifyOpportunityUrls(opts: {
       if (!resp.ok) {
         // 404 or error — listing is gone
         log("verify", `STALE (${resp.status}): ${opp.url}`);
-        markStale(opp.oppId, opp.flags as string[]);
+        await markStale(opp.oppId, opp.flags as string[]);
         stale++;
         continue;
       }
@@ -99,7 +98,7 @@ export async function verifyOpportunityUrls(opts: {
 
       if (overlap.length === 0 && pageWords.length > 0) {
         log("verify", `STALE (title mismatch): stored="${opp.listingTitle}" page="${pageName}" url=${opp.url}`);
-        markStale(opp.oppId, opp.flags as string[]);
+        await markStale(opp.oppId, opp.flags as string[]);
         stale++;
       } else {
         valid++;
@@ -118,12 +117,11 @@ export async function verifyOpportunityUrls(opts: {
   return { checked: toCheck.length, valid, stale, errors };
 }
 
-function markStale(oppId: number, existingFlags: string[]) {
+async function markStale(oppId: number, existingFlags: string[]): Promise<void> {
   const flags = [...existingFlags];
   if (!flags.includes("stale_url")) flags.push("stale_url");
 
-  db.update(opportunities)
+  await db.update(opportunities)
     .set({ flags, status: "passed" })
-    .where(eq(opportunities.id, oppId))
-    .run();
+    .where(eq(opportunities.id, oppId));
 }

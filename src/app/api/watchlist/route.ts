@@ -3,10 +3,10 @@ export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import { db } from "@/db/client";
 import { watchlistItems, products, pricePoints } from "@/db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 export async function GET() {
-  const items = db
+  const items = await db
     .select({
       id: watchlistItems.id,
       productId: watchlistItems.productId,
@@ -21,11 +21,10 @@ export async function GET() {
     })
     .from(watchlistItems)
     .innerJoin(products, eq(watchlistItems.productId, products.id))
-    .orderBy(desc(watchlistItems.createdAt))
-    .all();
+    .orderBy(desc(watchlistItems.createdAt));
 
   // Get latest price per product+condition
-  const priceRows = db
+  const priceRows = await db
     .select({
       productId: pricePoints.productId,
       condition: pricePoints.condition,
@@ -33,8 +32,7 @@ export async function GET() {
       recordedAt: pricePoints.recordedAt,
     })
     .from(pricePoints)
-    .orderBy(desc(pricePoints.recordedAt))
-    .all();
+    .orderBy(desc(pricePoints.recordedAt));
 
   // Build map: productId|condition -> latest price
   const priceMap = new Map<string, number>();
@@ -76,17 +74,17 @@ export async function POST(request: NextRequest) {
   }
 
   // Validate product exists
-  const product = db
+  const product = (await db
     .select({ id: products.id })
     .from(products)
     .where(eq(products.id, productId))
-    .get();
+    .limit(1))[0];
 
   if (!product) {
     return Response.json({ error: "Product not found" }, { status: 404 });
   }
 
-  const result = db
+  const result = (await db
     .insert(watchlistItems)
     .values({
       productId,
@@ -96,8 +94,7 @@ export async function POST(request: NextRequest) {
       active: true,
       notes: notes || null,
     })
-    .returning()
-    .get();
+    .returning())[0];
 
   return Response.json(result, { status: 201 });
 }

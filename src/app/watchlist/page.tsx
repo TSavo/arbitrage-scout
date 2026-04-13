@@ -8,7 +8,7 @@ import { WatchlistClient } from "./WatchlistClient";
 
 export default async function WatchlistPage() {
   // Fetch watchlist items joined with products
-  const items = db
+  const items = await db
     .select({
       id: watchlistItems.id,
       productId: watchlistItems.productId,
@@ -23,11 +23,10 @@ export default async function WatchlistPage() {
     })
     .from(watchlistItems)
     .innerJoin(products, eq(watchlistItems.productId, products.id))
-    .orderBy(desc(watchlistItems.createdAt))
-    .all();
+    .orderBy(desc(watchlistItems.createdAt));
 
   // Get latest price per product+condition
-  const priceRows = db
+  const priceRows = await db
     .select({
       productId: pricePoints.productId,
       condition: pricePoints.condition,
@@ -35,8 +34,7 @@ export default async function WatchlistPage() {
       recordedAt: pricePoints.recordedAt,
     })
     .from(pricePoints)
-    .orderBy(desc(pricePoints.recordedAt))
-    .all();
+    .orderBy(desc(pricePoints.recordedAt));
 
   const priceMap = new Map<string, number>();
   for (const p of priceRows) {
@@ -83,7 +81,7 @@ export default async function WatchlistPage() {
       : 0;
 
   // Top 500 products by sales volume for the add-to-watchlist picker
-  const productList = db
+  const productList = await db
     .select({
       id: products.id,
       title: products.title,
@@ -91,8 +89,7 @@ export default async function WatchlistPage() {
     })
     .from(products)
     .orderBy(desc(products.salesVolume))
-    .limit(500)
-    .all();
+    .limit(500);
 
   return (
     <div className="p-6 space-y-4">

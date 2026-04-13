@@ -186,24 +186,17 @@ async function queryProductsByMetadata(
   nodeId: number,
   kvs: ReadonlyArray<readonly [string, FieldValue]>,
 ): Promise<Array<{ readonly id: string }>> {
-  // Build JSON-based equality conditions using Drizzle's sql template.
-  // We rely on SQLite's json_extract for metadata lookup (the schema stores
-  // metadata as a JSON text column).
+  // Postgres jsonb path lookup. ->> extracts text, -> extracts jsonb.
+  // For numeric/boolean comparisons we cast the text result accordingly.
   const conds = [eq(products.taxonomyNodeId, nodeId)];
   for (const [key, value] of kvs) {
-    const jsonPath = `$.${key}`;
     if (typeof value === "string") {
-      conds.push(
-        sql`json_extract(${products.metadata}, ${jsonPath}) = ${value}`,
-      );
+      conds.push(sql`${products.metadata}->>${key} = ${value}`);
     } else if (typeof value === "number") {
-      conds.push(
-        sql`json_extract(${products.metadata}, ${jsonPath}) = ${value}`,
-      );
+      conds.push(sql`(${products.metadata}->>${key})::numeric = ${value}`);
     } else {
-      conds.push(
-        sql`json_extract(${products.metadata}, ${jsonPath}) = ${value ? 1 : 0}`,
-      );
+      // boolean: jsonb true/false vs textual 'true'/'false'
+      conds.push(sql`${products.metadata}->>${key} = ${value ? "true" : "false"}`);
     }
   }
   const rows = await db

@@ -79,7 +79,7 @@ export async function PATCH(
     return Response.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  db.update(opportunities).set(updates).where(eq(opportunities.id, numericId)).run();
+  await db.update(opportunities).set(updates).where(eq(opportunities.id, numericId));
 
   return Response.json({ ok: true, id: numericId, ...updates });
 }

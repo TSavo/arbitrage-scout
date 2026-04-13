@@ -108,6 +108,14 @@ function bufferToFloats(buf: Buffer): number[] {
   return out;
 }
 
+/** Parse a pgvector text-form literal "[1.0,2.0,...]" into a number[]. */
+function parsePgvectorLiteral(literal: string): number[] {
+  // Strip brackets and split.
+  const inner = literal.replace(/^\[|\]$/g, "");
+  if (!inner) return [];
+  return inner.split(",").map((s) => Number(s));
+}
+
 export type EntityType = "product" | "listing";
 
 /**
@@ -133,24 +141,26 @@ export class EmbeddingRepo {
     return !!row;
   }
 
-  /** Get the embedding vector for an entity from sqlite-vec. */
+  /** Get the embedding vector for an entity from pgvector. */
   async get(entityType: EntityType, entityId: string): Promise<number[] | null> {
     try {
-      const rows = db.all<{ embedding: Buffer }>(
-        sql`SELECT embedding FROM vec_embeddings
+      const rows = await db.execute<{ embedding: string }>(
+        sql`SELECT embedding::text AS embedding FROM vec_embeddings
             WHERE entity_type = ${entityType} AND entity_id = ${entityId}`
       );
       if (!rows.length) return null;
-      return bufferToFloats(rows[0].embedding);
+      // pgvector text format: "[1.0,2.0,...]"
+      const literal = rows[0].embedding;
+      return parsePgvectorLiteral(literal);
     } catch {
       return null;
     }
   }
 
-  /** Store an embedding. Writes metadata to Drizzle, vector to sqlite-vec. */
+  /** Store an embedding. Writes metadata to Drizzle, vector to pgvector. */
   async set(entityType: EntityType, entityId: string, vec: number[]): Promise<void> {
     const now = new Date().toISOString();
-    const buf = floatsToBuffer(vec);
+    const literal = `[${vec.join(",")}]`;
 
     // Metadata registry (no blob)
     await db
@@ -161,12 +171,16 @@ export class EmbeddingRepo {
         set: { embeddedAt: now },
       });
 
-    // Vector storage
+    // Vector storage — pgvector accepts the "[...]" literal as a vector cast.
     try {
-      db.run(sql`INSERT OR REPLACE INTO vec_embeddings(entity_type, entity_id, embedding)
-                  VALUES (${entityType}, ${entityId}, ${buf})`);
+      await db.execute(sql`
+        INSERT INTO vec_embeddings(entity_type, entity_id, embedding)
+        VALUES (${entityType}, ${entityId}, ${literal}::vector)
+        ON CONFLICT (entity_type, entity_id) DO UPDATE
+          SET embedding = EXCLUDED.embedding
+      `);
     } catch (err) {
-      error("embedding", `vec insert failed for ${entityType}:${entityId}: ${err}`);
+      error("embedding", `pgvector insert failed for ${entityType}:${entityId}: ${err}`);
     }
   }
 
@@ -257,8 +271,8 @@ export class EmbeddingRepo {
   }
 
   /**
-   * Find the most similar entities using sqlite-vec.
-   * Vector search at the DB level — zero memory overhead.
+   * Find the most similar entities using pgvector cosine distance.
+   * `<=>` is the cosine-distance operator.
    */
   async findSimilar(
     entityType: EntityType,
@@ -266,18 +280,17 @@ export class EmbeddingRepo {
     limit = 10,
   ): Promise<Array<{ entityId: string; distance: number }>> {
     try {
-      const buf = floatsToBuffer(queryVec);
-      const rows = db.all<{ entity_id: string; distance: number }>(
-        sql`SELECT entity_id, distance
+      const literal = `[${queryVec.join(",")}]`;
+      const rows = await db.execute<{ entity_id: string; distance: number }>(
+        sql`SELECT entity_id, embedding <=> ${literal}::vector AS distance
             FROM vec_embeddings
             WHERE entity_type = ${entityType}
-              AND embedding MATCH ${buf}
-              AND k = ${limit}
-            ORDER BY distance`
+            ORDER BY embedding <=> ${literal}::vector
+            LIMIT ${limit}`
       );
       return rows.map((r) => ({ entityId: r.entity_id, distance: r.distance }));
     } catch (err) {
-      error("embedding", `sqlite-vec search failed: ${err}`);
+      error("embedding", `pgvector search failed: ${err}`);
       return [];
     }
   }

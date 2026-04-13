@@ -15,7 +15,7 @@ export default async function ProductDetailPage(
   const { id } = await props.params;
 
   // Fetch product joined to its taxonomy node (single query, no N+1).
-  const productRow = db
+  const productRow = (await db
     .select({
       product: products,
       node: taxonomyNodes,
@@ -23,21 +23,20 @@ export default async function ProductDetailPage(
     .from(products)
     .leftJoin(taxonomyNodes, eq(taxonomyNodes.id, products.taxonomyNodeId))
     .where(eq(products.id, id))
-    .get();
+    .limit(1))[0];
 
   if (!productRow) notFound();
   const product = productRow.product;
   const node = productRow.node;
 
   // Fetch identifiers
-  const identifiers = db
+  const identifiers = await db
     .select()
     .from(productIdentifiers)
-    .where(eq(productIdentifiers.productId, id))
-    .all();
+    .where(eq(productIdentifiers.productId, id));
 
   // Fetch all price points for chart
-  const prices = db
+  const prices = await db
     .select({
       source: pricePoints.source,
       condition: pricePoints.condition,
@@ -46,8 +45,7 @@ export default async function ProductDetailPage(
     })
     .from(pricePoints)
     .where(eq(pricePoints.productId, id))
-    .orderBy(pricePoints.recordedAt)
-    .all();
+    .orderBy(pricePoints.recordedAt);
 
   // Latest price per condition
   const latestPrices = new Map<string, { price: number; source: string; date: string }>();
@@ -71,7 +69,7 @@ export default async function ProductDetailPage(
     .map(([date, vals]) => ({ date, ...vals }));
 
   // Fetch related opportunities
-  const relatedOpps = db
+  const relatedOpps = await db
     .select({
       id: opportunities.id,
       listingPriceUsd: opportunities.listingPriceUsd,
@@ -86,11 +84,10 @@ export default async function ProductDetailPage(
     .from(opportunities)
     .where(eq(opportunities.productId, id))
     .orderBy(desc(opportunities.foundAt))
-    .limit(20)
-    .all();
+    .limit(20);
 
   // Fetch listings that matched this product
-  const matchedListings = db
+  const matchedListings = await db
     .select({
       listingId: listingItems.listingId,
       confidence: listingItems.confidence,
@@ -107,8 +104,7 @@ export default async function ProductDetailPage(
     .innerJoin(listings, eq(listingItems.listingId, listings.id))
     .where(eq(listingItems.productId, id))
     .orderBy(desc(listings.lastSeenAt))
-    .limit(20)
-    .all();
+    .limit(20);
 
   return (
     <div className="p-6 space-y-6 max-w-6xl">

@@ -1,0 +1,79 @@
+# Arbitrage Scout — full stack on battleaxe.
+#
+# Two services:
+#   postgres — pgvector-enabled, persistent volume
+#   scout    — the scanner + Next.js app, talks to postgres over the
+#              internal network. Exposes port 3000 for the dashboard.
+#
+# Run:
+#   docker compose up -d --build
+#   docker compose logs -f scout
+#
+# To run a one-shot scan instead of the dashboard:
+#   docker compose run --rm scout pnpm tsx src/cli.ts scan
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: arbitrage-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arbitrage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: arbitrage
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arbitrage -d arbitrage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scout:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arbitrage-scout
+    restart: unless-stopped
+    # Map host.docker.internal → host gateway IP. Lets the container reach
+    # Ollama running on the host (battleaxe) at port 11434.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://arbitrage:${POSTGRES_PASSWORD}@postgres:5432/arbitrage
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODELS: ${OPENROUTER_MODELS:-openai/gpt-oss-120b}
+      OPENROUTER_PARALLEL: ${OPENROUTER_PARALLEL:-10}
+      EBAY_APP_ID: ${EBAY_APP_ID:-}
+      EBAY_CERT_ID: ${EBAY_CERT_ID:-}
+      PC_API_KEY: ${PC_API_KEY:-}
+      PG_MAX: "20"
+      # K&L needs a headed Chrome with login cookies — not available inside
+      # the container. Disable until we wire up CDP-on-battleaxe.
+      KLWINES_ENABLED: "false"
+      # All Playwright/CDP-based adapters need a headed Chrome at :9222.
+      # Disabled in headless container until we wire up CDP-on-battleaxe.
+      CDP_ADAPTERS_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      # Logs volume so daily-scan.log persists across container restarts.
+      - scout-logs:/app/data
+    # Default: dev server. For pure scanner use:
+    #   docker compose run --rm scout pnpm tsx src/cli.ts scan
+    command: ["pnpm", "tsx", "src/cli.ts", "scan"]
+
+volumes:
+  # Existing volume on battleaxe holding the migrated 3M+ rows. Declared
+  # external so compose attaches to it instead of creating an empty one.
+  pg-data:
+    external: true
+    name: arbitrage_pg_data
+  scout-logs:

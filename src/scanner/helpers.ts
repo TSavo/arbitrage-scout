@@ -3,7 +3,7 @@
  */
 
 import { eq, desc, and } from "drizzle-orm";
-import { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import * as schema from "../db/schema";
 import {
   listings,
@@ -14,7 +14,7 @@ import type { RawListing } from "../sources/IMarketplaceAdapter";
 import { log } from "@/lib/logger";
 import { cachedFetch } from "@/lib/cached_fetch";
 
-export type Db = BetterSQLite3Database<typeof schema>;
+export type Db = PostgresJsDatabase<typeof schema>;
 
 // ── Config helpers ────────────────────────────────────────────────────
 
@@ -34,14 +34,14 @@ export function cfg<T>(
 
 // ── Listing upsert ────────────────────────────────────────────────────
 
-export function upsertListing(
+export async function upsertListing(
   db: Db,
   listing: RawListing,
   isLot = false,
-): typeof listings.$inferSelect {
+): Promise<typeof listings.$inferSelect> {
   const now = new Date().toISOString();
 
-  const existing = db
+  const existing = (await db
     .select()
     .from(listings)
     .where(
@@ -50,12 +50,11 @@ export function upsertListing(
         eq(listings.marketplaceListingId, listing.listing_id),
       ),
     )
-    .limit(1)
-    .all()[0];
+    .limit(1))[0];
 
   if (existing) {
     log("helpers", `listing upsert: UPDATE id=${existing.id} [${listing.marketplace_id}/${listing.listing_id}] price=$${listing.price_usd.toFixed(2)}`);
-    db.update(listings)
+    await db.update(listings)
       .set({
         title: listing.title,
         url: listing.url ?? existing.url,
@@ -67,8 +66,7 @@ export function upsertListing(
         lastSeenAt: now,
         isActive: true,
       })
-      .where(eq(listings.id, existing.id))
-      .run();
+      .where(eq(listings.id, existing.id));
     return {
       ...existing,
       title: listing.title,
@@ -83,7 +81,7 @@ export function upsertListing(
     };
   }
 
-  const inserted = db
+  const inserted = (await db
     .insert(listings)
     .values({
       marketplaceId: listing.marketplace_id,
@@ -98,8 +96,7 @@ export function upsertListing(
       lastSeenAt: now,
       isActive: true,
     })
-    .returning()
-    .get();
+    .returning())[0];
 
   log("helpers", `listing upsert: INSERT id=${inserted.id} [${listing.marketplace_id}/${listing.listing_id}]${isLot ? " [lot]" : ""} price=$${listing.price_usd.toFixed(2)}`);
   return inserted;
@@ -111,12 +108,12 @@ export function upsertListing(
  * Get the latest PricePoint for a product+condition.
  * Falls back to 'loose' if the requested condition has no price.
  */
-export function getMarketPrice(
+export async function getMarketPrice(
   db: Db,
   productId: string,
   condition: string,
-): number | null {
-  const row = db
+): Promise<number | null> {
+  const row = (await db
     .select({ priceUsd: pricePoints.priceUsd })
     .from(pricePoints)
     .where(
@@ -126,8 +123,7 @@ export function getMarketPrice(
       ),
     )
     .orderBy(desc(pricePoints.recordedAt))
-    .limit(1)
-    .all()[0];
+    .limit(1))[0];
 
   if (row) {
     log("helpers", `market price: product=${productId} condition=${condition} price=$${row.priceUsd.toFixed(2)}`);
@@ -136,7 +132,7 @@ export function getMarketPrice(
 
   // Fall back to loose
   if (condition !== "loose") {
-    const fallback = db
+    const fallback = (await db
       .select({ priceUsd: pricePoints.priceUsd })
       .from(pricePoints)
       .where(
@@ -146,8 +142,7 @@ export function getMarketPrice(
         ),
       )
       .orderBy(desc(pricePoints.recordedAt))
-      .limit(1)
-      .all()[0];
+      .limit(1))[0];
 
     if (fallback) {
       log("helpers", `market price: product=${productId} condition=${condition} not found, fallback loose=$${fallback.priceUsd.toFixed(2)}`);
@@ -163,8 +158,8 @@ export function getMarketPrice(
 
 // ── Scan log ──────────────────────────────────────────────────────────
 
-export function startScanLog(db: Db, marketplaceId: string): number {
-  const row = db
+export async function startScanLog(db: Db, marketplaceId: string): Promise<number> {
+  const row = (await db
     .insert(scanLogs)
     .values({
       marketplaceId,
@@ -174,20 +169,19 @@ export function startScanLog(db: Db, marketplaceId: string): number {
       opportunitiesFound: 0,
       rateLimited: false,
     })
-    .returning({ id: scanLogs.id })
-    .get();
+    .returning({ id: scanLogs.id }))[0];
   return row.id;
 }
 
-export function finishScanLog(
+export async function finishScanLog(
   db: Db,
   scanLogId: number,
   queriesRun: number,
   listingsFound: number,
   opportunitiesFound: number,
   rateLimited: boolean,
-): void {
-  db.update(scanLogs)
+): Promise<void> {
+  await db.update(scanLogs)
     .set({
       finishedAt: new Date().toISOString(),
       queriesRun,
@@ -195,8 +189,7 @@ export function finishScanLog(
       opportunitiesFound,
       rateLimited,
     })
-    .where(eq(scanLogs.id, scanLogId))
-    .run();
+    .where(eq(scanLogs.id, scanLogId));
 }
 
 // ── LLM factory ───────────────────────────────────────────────────────

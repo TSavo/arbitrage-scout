@@ -1,3 +1,5 @@
+export {};
+
 /**
  * Probe candidate hosts to see which are Shopify-backed. For each host:
  *   - GET /collections.json → if 200 JSON with .collections, it's Shopify
@@ -9,46 +11,88 @@
  */
 
 const HOSTS: { host: string; category: string }[] = [
-  // Spirits
-  { host: "acespirits.com", category: "spirits" },
-  { host: "mashandgrape.com", category: "spirits" },
-  { host: "dekanta.com", category: "spirits" },
-  { host: "oldtowntequila.com", category: "spirits" },
-  { host: "whiskyfoundation.com", category: "spirits" },
-  { host: "bountyhunterwine.com", category: "spirits" },
-  { host: "whiskybarrel.com", category: "spirits" },
+  // Spirits (batch 2)
+  { host: "astorwines.com", category: "spirits" },
+  { host: "sipwhiskey.com", category: "spirits" },
+  { host: "bourbondive.com", category: "spirits" },
+  { host: "wineandwhiskeyglobe.com", category: "spirits" },
+  { host: "singlemaltaddicts.com", category: "spirits" },
+  { host: "oldbarrelinn.com", category: "spirits" },
+  { host: "rarewhiskey101.com", category: "spirits" },
+  { host: "scotchandsirens.com", category: "spirits" },
+  { host: "millenniumwhiskey.com", category: "spirits" },
+  { host: "thewineandwhiskeyshoppe.com", category: "spirits" },
+  { host: "thewhiskyshelf.com", category: "spirits" },
+  { host: "rarewhisky101.com", category: "spirits" },
+  { host: "thepartysource.com", category: "spirits" },
+  { host: "houseofmalt.co.uk", category: "spirits" },
+  { host: "masterofmalt.com", category: "spirits" },
   // Wine
-  { host: "lastbottlewines.com", category: "wine" },
-  { host: "rarewineco.com", category: "wine" },
-  { host: "vinfolio.com", category: "wine" },
-  { host: "garagistewine.com", category: "wine" },
-  // Trading cards
-  { host: "steelcitycollectibles.com", category: "cards" },
-  { host: "blowoutcards.com", category: "cards" },
-  { host: "dacardworld.com", category: "cards" },
-  { host: "trollandtoad.com", category: "cards" },
-  { host: "coolstuffinc.com", category: "cards" },
-  // Retro games
-  { host: "dkoldies.com", category: "retro_games" },
-  { host: "lukiegames.com", category: "retro_games" },
-  // LEGO / toys
-  { host: "firestartoys.com", category: "lego" },
-  { host: "minifigs.me", category: "lego" },
-  { host: "popinabox.com", category: "funko" },
-  // Comics
-  { host: "thirdeyecomics.com", category: "comics" },
-  { host: "dcbservice.com", category: "comics" },
-  { host: "midtowncomics.com", category: "comics" },
+  { host: "klwinesdtc.com", category: "wine" },
+  { host: "vinoshipper.com", category: "wine" },
+  { host: "somm.com", category: "wine" },
+  { host: "flatirondraft.com", category: "wine" },
+  { host: "winecommune.com", category: "wine" },
+  { host: "winebid.com", category: "wine" },
   // Watches
-  { host: "teddybaldassarre.com", category: "watches" },
-  { host: "windupwatchshop.com", category: "watches" },
-  // Apple refurb
-  { host: "macofalltrades.com", category: "apple" },
-  { host: "macsales.com", category: "apple" },
-  { host: "gainsaver.com", category: "apple" },
-  { host: "plug.tech", category: "apple" },
-  // Pens
-  { host: "gouletpens.com", category: "pens" },
+  { host: "chronextworld.com", category: "watches" },
+  { host: "davidsw.com", category: "watches" },
+  { host: "beyondthedial.com", category: "watches" },
+  { host: "longislandwatch.com", category: "watches" },
+  { host: "watchgecko.com", category: "watches" },
+  { host: "hodinkee.com", category: "watches" },
+  // Knives (custom + EDC)
+  { host: "bladehq.com", category: "knives" },
+  { host: "atlanticknife.com", category: "knives" },
+  { host: "collectorknives.net", category: "knives" },
+  { host: "knifeworks.com", category: "knives" },
+  { host: "knifecenter.com", category: "knives" },
+  { host: "dlttrading.com", category: "knives" },
+  // Audio (vintage + HiFi)
+  { host: "audioarkhive.com", category: "audio" },
+  { host: "vintagevibesaudio.com", category: "audio" },
+  { host: "upscaleaudio.com", category: "audio" },
+  { host: "musicdirect.com", category: "audio" },
+  { host: "needledoctor.com", category: "audio" },
+  // Retro games
+  { host: "stoneagegamer.com", category: "retro_games" },
+  { host: "pinkgorillagames.com", category: "retro_games" },
+  { host: "starlandgames.com", category: "retro_games" },
+  { host: "retrogameboyz.com", category: "retro_games" },
+  // Trading cards (more)
+  { host: "pwccmarketplace.com", category: "cards" },
+  { host: "alt.com", category: "cards" },
+  { host: "ludkins.com", category: "cards" },
+  { host: "tcg-world.com", category: "cards" },
+  { host: "pucatrade.com", category: "cards" },
+  // Pens / stationery
+  { host: "anderson pens.com", category: "pens" },
+  { host: "appelboompens.com", category: "pens" },
+  { host: "penchalet.com", category: "pens" },
+  { host: "jetpens.com", category: "pens" },
+  { host: "crazyaboutapens.com", category: "pens" },
+  { host: "penaddict.com", category: "pens" },
+  // Fragrances
+  { host: "maxaroma.com", category: "fragrance" },
+  { host: "fragrancenet.com", category: "fragrance" },
+  { host: "scentbird.com", category: "fragrance" },
+  { host: "luckyscent.com", category: "fragrance" },
+  // Sneakers
+  { host: "sneakerpolitics.com", category: "sneakers" },
+  { host: "kicksonfire.com", category: "sneakers" },
+  { host: "shelflife.co.za", category: "sneakers" },
+  // Vintage/antique
+  { host: "chairishaboutique.com", category: "antiques" },
+  { host: "1stdibs.com", category: "antiques" },
+  // Photography
+  { host: "kehcamera.com", category: "photography" },
+  { host: "mpb.com", category: "photography" },
+  { host: "adorama.com", category: "photography" },
+  // Musical instruments
+  { host: "reverb.com", category: "instruments" },
+  { host: "westsidemusicllc.com", category: "instruments" },
+  { host: "wildwoodguitars.com", category: "instruments" },
+  { host: "chicagomusicexchange.com", category: "instruments" },
 ];
 
 interface Probe {

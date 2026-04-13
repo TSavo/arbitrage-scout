@@ -1,18 +1,22 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  boolean,
   real,
+  jsonb,
+  serial,
+  vector,
   index,
   uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+} from "drizzle-orm/pg-core";
 
 // ── Taxonomy (DB-driven hierarchical product tree) ───────────────────
 
-export const taxonomyNodes = sqliteTable(
+export const taxonomyNodes = pgTable(
   "taxonomy_nodes",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     parentId: integer("parent_id"),
     slug: text("slug").notNull(),
     label: text("label").notNull(),
@@ -21,7 +25,7 @@ export const taxonomyNodes = sqliteTable(
     pathCache: text("path_cache").notNull(),
     createdAt: text("created_at").notNull(),
     createdBy: text("created_by").notNull(),
-    canonical: integer("canonical", { mode: "boolean" }).notNull().default(false),
+    canonical: boolean("canonical").notNull().default(false),
     observationCount: integer("observation_count").notNull().default(0),
     lastObservedAt: text("last_observed_at"),
   },
@@ -33,10 +37,10 @@ export const taxonomyNodes = sqliteTable(
   ],
 );
 
-export const taxonomyNodeFields = sqliteTable(
+export const taxonomyNodeFields = pgTable(
   "taxonomy_node_fields",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     nodeId: integer("node_id")
       .notNull()
       .references(() => taxonomyNodes.id, { onDelete: "cascade" }),
@@ -46,18 +50,18 @@ export const taxonomyNodeFields = sqliteTable(
     pattern: text("pattern"),
     minValue: real("min_value"),
     maxValue: real("max_value"),
-    isInteger: integer("is_integer", { mode: "boolean" }).notNull().default(false),
+    isInteger: boolean("is_integer").notNull().default(false),
     format: text("format"),
     unit: text("unit"),
     extractHint: text("extract_hint"),
-    isRequired: integer("is_required", { mode: "boolean" }).notNull().default(false),
-    isSearchable: integer("is_searchable", { mode: "boolean" }).notNull().default(false),
+    isRequired: boolean("is_required").notNull().default(false),
+    isSearchable: boolean("is_searchable").notNull().default(false),
     searchWeight: real("search_weight").notNull().default(1.0),
-    isIdentifier: integer("is_identifier", { mode: "boolean" }).notNull().default(false),
-    isPricingAxis: integer("is_pricing_axis", { mode: "boolean" }).notNull().default(false),
+    isIdentifier: boolean("is_identifier").notNull().default(false),
+    isPricingAxis: boolean("is_pricing_axis").notNull().default(false),
     displayPriority: integer("display_priority").notNull().default(100),
-    isHidden: integer("is_hidden", { mode: "boolean" }).notNull().default(false),
-    canonical: integer("canonical", { mode: "boolean" }).notNull().default(false),
+    isHidden: boolean("is_hidden").notNull().default(false),
+    canonical: boolean("canonical").notNull().default(false),
     observationCount: integer("observation_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     createdBy: text("created_by").notNull(),
@@ -71,10 +75,10 @@ export const taxonomyNodeFields = sqliteTable(
   ],
 );
 
-export const taxonomyNodeFieldEnumValues = sqliteTable(
+export const taxonomyNodeFieldEnumValues = pgTable(
   "taxonomy_node_field_enum_values",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     fieldId: integer("field_id")
       .notNull()
       .references(() => taxonomyNodeFields.id, { onDelete: "cascade" }),
@@ -86,10 +90,10 @@ export const taxonomyNodeFieldEnumValues = sqliteTable(
   (t) => [uniqueIndex("uq_taxonomy_field_enum_value").on(t.fieldId, t.value)],
 );
 
-export const taxonomyExternalRefs = sqliteTable(
+export const taxonomyExternalRefs = pgTable(
   "taxonomy_external_refs",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     nodeId: integer("node_id")
       .notNull()
       .references(() => taxonomyNodes.id, { onDelete: "cascade" }),
@@ -105,14 +109,14 @@ export const taxonomyExternalRefs = sqliteTable(
   ],
 );
 
-export const schemaVersions = sqliteTable(
+export const schemaVersions = pgTable(
   "schema_versions",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     eventType: text("event_type").notNull(),
     nodeId: integer("node_id"),
     fieldId: integer("field_id"),
-    payload: text("payload", { mode: "json" })
+    payload: jsonb("payload")
       .notNull()
       .$type<Record<string, unknown>>()
       .default({}),
@@ -127,7 +131,7 @@ export const schemaVersions = sqliteTable(
 
 // ── Products ─────────────────────────────────────────────────────────
 
-export const products = sqliteTable(
+export const products = pgTable(
   "products",
   {
     id: text("id").primaryKey(),
@@ -139,7 +143,7 @@ export const products = sqliteTable(
     genre: text("genre"),
     salesVolume: integer("sales_volume").notNull().default(0),
     /** DB-driven metadata keyed by taxonomy_node_fields.key. */
-    metadata: text("metadata", { mode: "json" })
+    metadata: jsonb("metadata")
       .notNull()
       .$type<Record<string, unknown>>()
       .default({}),
@@ -153,10 +157,10 @@ export const products = sqliteTable(
 
 // ── Product Identifiers ──────────────────────────────────────────────
 
-export const productIdentifiers = sqliteTable(
+export const productIdentifiers = pgTable(
   "product_identifiers",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     productId: text("product_id")
       .notNull()
       .references(() => products.id),
@@ -178,10 +182,10 @@ export const productIdentifiers = sqliteTable(
 
 // ── Price Points ─────────────────────────────────────────────────────
 
-export const pricePoints = sqliteTable(
+export const pricePoints = pgTable(
   "price_points",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     productId: text("product_id")
       .notNull()
       .references(() => products.id),
@@ -189,7 +193,7 @@ export const pricePoints = sqliteTable(
     /** @deprecated — kept for back-compat. Prefer `dimensions`. */
     condition: text("condition").notNull().default(""),
     /** JSON of pricing-axis field values (e.g. {condition:"loose"}, or {} for bourbon). */
-    dimensions: text("dimensions", { mode: "json" })
+    dimensions: jsonb("dimensions")
       .notNull()
       .$type<Record<string, unknown>>()
       .default({}),
@@ -217,21 +221,19 @@ export const pricePoints = sqliteTable(
 
 // ── Marketplaces ─────────────────────────────────────────────────────
 
-export const marketplaces = sqliteTable("marketplaces", {
+export const marketplaces = pgTable("marketplaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   baseUrl: text("base_url").notNull().default(""),
-  supportsApi: integer("supports_api", { mode: "boolean" })
-    .notNull()
-    .default(false),
+  supportsApi: boolean("supports_api").notNull().default(false),
 });
 
 // ── Listings ─────────────────────────────────────────────────────────
 
-export const listings = sqliteTable(
+export const listings = pgTable(
   "listings",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     marketplaceId: text("marketplace_id")
       .notNull()
       .references(() => marketplaces.id),
@@ -242,13 +244,10 @@ export const listings = sqliteTable(
     priceUsd: real("price_usd").notNull(),
     shippingUsd: real("shipping_usd").notNull().default(0),
     seller: text("seller"),
-    isLot: integer("is_lot", { mode: "boolean" }).notNull().default(false),
+    isLot: boolean("is_lot").notNull().default(false),
     firstSeenAt: text("first_seen_at").notNull(),
     lastSeenAt: text("last_seen_at").notNull(),
-    isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
-    /** Auction close time (ISO string or raw "End Date" text from the
-     *  source). Null for fixed-price listings. Used to distinguish
-     *  in-progress bids from hammered finals. */
+    isActive: boolean("is_active").notNull().default(true),
     endTime: text("end_time"),
   },
   (table) => [
@@ -263,10 +262,10 @@ export const listings = sqliteTable(
 
 // ── Listing Items ────────────────────────────────────────────────────
 
-export const listingItems = sqliteTable(
+export const listingItems = pgTable(
   "listing_items",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     listingId: integer("listing_id")
       .notNull()
       .references(() => listings.id),
@@ -275,14 +274,14 @@ export const listingItems = sqliteTable(
       .references(() => products.id),
     quantity: integer("quantity").notNull().default(1),
     condition: text("condition").notNull().default("loose"),
-    conditionDetails: text("condition_details", { mode: "json" })
+    conditionDetails: jsonb("condition_details")
       .notNull()
       .$type<Record<string, unknown>>()
       .default({}),
     estimatedValueUsd: real("estimated_value_usd"),
     confidence: real("confidence").notNull().default(0),
-    confirmed: integer("confirmed", { mode: "boolean" }).notNull().default(false),
-    rawExtraction: text("raw_extraction", { mode: "json" })
+    confirmed: boolean("confirmed").notNull().default(false),
+    rawExtraction: jsonb("raw_extraction")
       .$type<Record<string, unknown>>()
       .default({}),
   },
@@ -295,10 +294,10 @@ export const listingItems = sqliteTable(
 
 // ── Opportunities ────────────────────────────────────────────────────
 
-export const opportunities = sqliteTable(
+export const opportunities = pgTable(
   "opportunities",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     listingId: integer("listing_id")
       .notNull()
       .references(() => listings.id),
@@ -313,7 +312,7 @@ export const opportunities = sqliteTable(
     marginPct: real("margin_pct").notNull(),
     feesUsd: real("fees_usd").notNull().default(0),
     confidence: real("confidence").notNull().default(0),
-    flags: text("flags", { mode: "json" })
+    flags: jsonb("flags")
       .notNull()
       .$type<string[]>()
       .default([]),
@@ -336,10 +335,10 @@ export const opportunities = sqliteTable(
 
 // ── Inventory Items (bottles the user owns) ─────────────────────────
 
-export const inventoryItems = sqliteTable(
+export const inventoryItems = pgTable(
   "inventory_items",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     /** Canonical product row. Nullable when we have the source SKU but
      *  haven't been able to resolve it to a product yet — backfilled
      *  automatically when a marketplace scan links the sku to a product. */
@@ -371,10 +370,10 @@ export const inventoryItems = sqliteTable(
 
 // ── Watchlist Items ─────────────────────────────────────────────────
 
-export const watchlistItems = sqliteTable(
+export const watchlistItems = pgTable(
   "watchlist_items",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     productId: text("product_id")
       .notNull()
       .references(() => products.id),
@@ -382,7 +381,7 @@ export const watchlistItems = sqliteTable(
     condition: text("condition").notNull().default("loose"),
     createdAt: text("created_at").notNull(),
     triggeredAt: text("triggered_at"),
-    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    active: boolean("active").notNull().default(true),
     notes: text("notes"),
   },
   (table) => [
@@ -390,16 +389,16 @@ export const watchlistItems = sqliteTable(
   ],
 );
 
-// ── Embeddings (polymorphic) ─────────────────────────────────────────
+// ── Embeddings (polymorphic metadata) ────────────────────────────────
 
-export const embeddings = sqliteTable(
+export const embeddings = pgTable(
   "embeddings",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     entityType: text("entity_type").notNull(), // "product" | "listing" | etc
     entityId: text("entity_id").notNull(),
     embeddedAt: text("embedded_at").notNull(),
-    // Vector data lives in sqlite-vec virtual table (vec_embeddings), not here.
+    // Vector data lives in vec_embeddings (pgvector), not here.
   },
   (table) => [
     uniqueIndex("uq_embeddings_entity").on(table.entityType, table.entityId),
@@ -407,12 +406,30 @@ export const embeddings = sqliteTable(
   ],
 );
 
+// ── Vector Embeddings (pgvector) ─────────────────────────────────────
+// Native pgvector table; replaces the sqlite-vec virtual table of the
+// same name. Dimensionality matches the existing llama3-embeddings model.
+
+export const vecEmbeddings = pgTable(
+  "vec_embeddings",
+  {
+    id: serial("id").primaryKey(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    embedding: vector("embedding", { dimensions: 4096 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_vec_embeddings_entity").on(table.entityType, table.entityId),
+    index("ix_vec_embeddings_type").on(table.entityType),
+  ],
+);
+
 // ── HTTP Cache (durable response cache for all outbound API calls) ──
 
-export const httpCache = sqliteTable(
+export const httpCache = pgTable(
   "http_cache",
   {
-    id: integer("id").primaryKey({ autoIncrement: true }),
+    id: serial("id").primaryKey(),
     fingerprint: text("fingerprint").notNull(), // sha256(method|url|bodyHash)
     method: text("method").notNull(),
     url: text("url").notNull(),
@@ -433,16 +450,14 @@ export const httpCache = sqliteTable(
 
 // ── Scan Logs ────────────────────────────────────────────────────────
 
-export const scanLogs = sqliteTable("scan_logs", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
+export const scanLogs = pgTable("scan_logs", {
+  id: serial("id").primaryKey(),
   startedAt: text("started_at").notNull(),
   finishedAt: text("finished_at"),
   marketplaceId: text("marketplace_id").references(() => marketplaces.id),
   queriesRun: integer("queries_run").notNull().default(0),
   listingsFound: integer("listings_found").notNull().default(0),
   opportunitiesFound: integer("opportunities_found").notNull().default(0),
-  rateLimited: integer("rate_limited", { mode: "boolean" })
-    .notNull()
-    .default(false),
+  rateLimited: boolean("rate_limited").notNull().default(false),
   error: text("error"),
 });

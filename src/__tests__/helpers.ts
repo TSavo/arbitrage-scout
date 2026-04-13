@@ -4,8 +4,14 @@
 
 import Database from "better-sqlite3";
 import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { eq } from "drizzle-orm";
 import * as schema from "../db/schema";
+
+// NOTE: createTestDb() still returns better-sqlite3 for legacy unit tests
+// that haven't been ported to PG. The seedTestData function below targets
+// the live PG schema. New tests should use a real PG via DATABASE_URL or
+// be skipped on the SQLite path.
 
 export function createTestDb() {
   const sqlite = new Database(":memory:");
@@ -237,12 +243,12 @@ export function createTestDb() {
   return { sqlite, db };
 }
 
-/** Seed minimal test data */
-export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
+/** Seed minimal test data (Postgres). */
+export async function seedTestData(db: PostgresJsDatabase<typeof schema>) {
   const now = new Date().toISOString();
 
-  // Taxonomy root — required by TaxonomyRepo.getRoot() used in the pipeline.
-  db.insert(schema.taxonomyNodes).values({
+  // Taxonomy root.
+  await db.insert(schema.taxonomyNodes).values({
     slug: "root",
     label: "Root",
     description: "Taxonomy root",
@@ -251,74 +257,65 @@ export function seedTestData(db: BetterSQLite3Database<typeof schema>) {
     observationCount: 0,
     createdAt: now,
     createdBy: "test-seed",
-  }).run();
+  });
 
   // Marketplaces
-  db.insert(schema.marketplaces).values({ id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true }).run();
-  db.insert(schema.marketplaces).values({ id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true }).run();
-  db.insert(schema.marketplaces).values({ id: "ebay", name: "eBay", baseUrl: "https://ebay.com", supportsApi: true }).run();
-  db.insert(schema.marketplaces).values({ id: "pricecharting", name: "PriceCharting", baseUrl: "https://pricecharting.com", supportsApi: true }).run();
+  await db.insert(schema.marketplaces).values({ id: "shopgoodwill", name: "ShopGoodwill", baseUrl: "https://shopgoodwill.com", supportsApi: true });
+  await db.insert(schema.marketplaces).values({ id: "hibid", name: "HiBid", baseUrl: "https://hibid.com", supportsApi: true });
+  await db.insert(schema.marketplaces).values({ id: "ebay", name: "eBay", baseUrl: "https://ebay.com", supportsApi: true });
+  await db.insert(schema.marketplaces).values({ id: "pricecharting", name: "PriceCharting", baseUrl: "https://pricecharting.com", supportsApi: true });
 
-  // Minimal taxonomy leaf: retro_game under the root that was inserted above.
-  const rootNode = db.select().from(schema.taxonomyNodes).where(eq(schema.taxonomyNodes.slug, "root")).get();
-  const retroNode = db.insert(schema.taxonomyNodes).values({
+  const rootNode = (await db.select().from(schema.taxonomyNodes).where(eq(schema.taxonomyNodes.slug, "root")).limit(1))[0];
+  const retroNode = (await db.insert(schema.taxonomyNodes).values({
     parentId: rootNode!.id, slug: "retro_game", label: "Retro Video Game",
     pathCache: "/retro_game", canonical: true, observationCount: 0,
     createdAt: now, createdBy: "seed",
-  }).returning({ id: schema.taxonomyNodes.id }).get();
+  }).returning({ id: schema.taxonomyNodes.id }))[0];
 
-  const cond = db.insert(schema.taxonomyNodeFields).values({
+  const cond = (await db.insert(schema.taxonomyNodeFields).values({
     nodeId: retroNode.id, key: "condition", label: "Condition",
     dataType: "string", isPricingAxis: true, isSearchable: false,
     searchWeight: 1, isIdentifier: false, isRequired: false, isInteger: false,
     displayPriority: 5, isHidden: false, canonical: true, observationCount: 0,
     createdAt: now, createdBy: "seed",
-  }).returning({ id: schema.taxonomyNodeFields.id }).get();
+  }).returning({ id: schema.taxonomyNodeFields.id }))[0];
   for (const [i, v] of ["loose", "cib", "new_sealed"].entries()) {
-    db.insert(schema.taxonomyNodeFieldEnumValues).values({
+    await db.insert(schema.taxonomyNodeFieldEnumValues).values({
       fieldId: cond.id, value: v, label: v, displayOrder: (i + 1) * 10,
-    }).run();
+    });
   }
 
-  // Products — all linked to taxonomy nodes (legacy productTypeId is gone).
-  db.insert(schema.products).values({
+  await db.insert(schema.products).values({
     id: "pc-1", taxonomyNodeId: retroNode.id,
     title: "Super Mario 64",
     platform: "Nintendo 64", salesVolume: 5000, createdAt: now, updatedAt: now,
-  }).run();
-
-  db.insert(schema.products).values({
+  });
+  await db.insert(schema.products).values({
     id: "pc-2", taxonomyNodeId: retroNode.id,
     title: "GoldenEye 007",
     platform: "Nintendo 64", salesVolume: 3000, createdAt: now, updatedAt: now,
-  }).run();
-
-  db.insert(schema.products).values({
+  });
+  await db.insert(schema.products).values({
     id: "pc-3", title: "Charizard VMAX",
     platform: "Pokemon Darkness Ablaze", salesVolume: 8000, createdAt: now, updatedAt: now,
-  }).run();
-
-  db.insert(schema.products).values({
+  });
+  await db.insert(schema.products).values({
     id: "pc-bourbon-1", title: "Pappy Van Winkle 23",
     salesVolume: 100, createdAt: now, updatedAt: now,
-  }).run();
-
-  db.insert(schema.products).values({
+  });
+  await db.insert(schema.products).values({
     id: "pc-sports-1", title: "Mickey Mantle 1952 Topps",
     salesVolume: 500, createdAt: now, updatedAt: now,
-  }).run();
+  });
 
-  // Price points — with dimensions JSON populated
-  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 25.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "cib", dimensions: { condition: "cib" }, priceUsd: 45.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-2", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 15.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-3", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 150.00, recordedAt: "2026-04-10" }).run();
-  // Bourbon: single price, no pricing axes
-  db.insert(schema.pricePoints).values({ productId: "pc-bourbon-1", source: "secondary", condition: "", dimensions: {}, priceUsd: 3500.00, recordedAt: "2026-04-10" }).run();
-  // Sports card: multiple combos
-  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "raw", dimensions: { condition: "raw" }, priceUsd: 200.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 8, grading_company: "PSA" }, priceUsd: 5000.00, recordedAt: "2026-04-10" }).run();
-  db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 9, grading_company: "PSA" }, priceUsd: 25000.00, recordedAt: "2026-04-11" }).run();
+  await db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 25.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-1", source: "pricecharting", condition: "cib", dimensions: { condition: "cib" }, priceUsd: 45.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-2", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 15.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-3", source: "pricecharting", condition: "loose", dimensions: { condition: "loose" }, priceUsd: 150.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-bourbon-1", source: "secondary", condition: "", dimensions: {}, priceUsd: 3500.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "raw", dimensions: { condition: "raw" }, priceUsd: 200.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 8, grading_company: "PSA" }, priceUsd: 5000.00, recordedAt: "2026-04-10" });
+  await db.insert(schema.pricePoints).values({ productId: "pc-sports-1", source: "ebay", condition: "graded", dimensions: { condition: "graded", grade: 9, grading_company: "PSA" }, priceUsd: 25000.00, recordedAt: "2026-04-11" });
 
   return { now };
 }

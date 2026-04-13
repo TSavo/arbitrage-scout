@@ -113,21 +113,20 @@ function parseCsvLine(line: string): string[] {
 
 // ── Seeding ───────────────────────────────────────────────────────────
 
-function seedMarketplaces(): void {
+async function seedMarketplaces(): Promise<void> {
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
     { id: "mercari", name: "Mercari", baseUrl: "https://www.mercari.com", supportsApi: false },
   ];
   for (const mp of defaults) {
-    const existing = db
+    const existing = await db
       .select({ id: marketplaces.id })
       .from(marketplaces)
       .where(eq(marketplaces.id, mp.id))
-      .limit(1)
-      .all();
+      .limit(1);
     if (!existing.length) {
-      db.insert(marketplaces).values(mp).run();
+      await db.insert(marketplaces).values(mp);
     }
   }
 }
@@ -151,10 +150,9 @@ async function loadCsv(
   const now = new Date().toISOString();
 
   // Load existing IDs for fast dedup
-  const existingRows = db
+  const existingRows = await db
     .select({ id: products.id })
-    .from(products)
-    .all();
+    .from(products);
   const existingIds = new Set<string>(existingRows.map((r) => r.id));
   log("stock", `dedup set: ${existingIds.size} existing products in DB`);
 
@@ -175,24 +173,21 @@ async function loadCsv(
     // totalLines stays 0 — progress function handles unknown total gracefully.
     // Previously used readFileSync to count lines, but that doubled memory usage.
 
-    function flushBatch() {
+    async function flushBatch(): Promise<void> {
       if (!productsBatch.length) return;
-
-      db.transaction((tx) => {
-        for (const p of productsBatch) {
-          tx.insert(products).values(p).onConflictDoNothing().run();
-        }
-        for (const i of identifiersBatch) {
-          tx.insert(productIdentifiers).values(i).onConflictDoNothing().run();
-        }
-        for (const p of pricesBatch) {
-          tx.insert(pricePoints).values(p).onConflictDoNothing().run();
-        }
-      });
-
+      // Snapshot the buffers and clear them BEFORE the await so concurrent
+      // line events can keep filling without seeing in-flight rows twice.
+      const pBatch = productsBatch.slice();
+      const iBatch = identifiersBatch.slice();
+      const ppBatch = pricesBatch.slice();
       productsBatch.length = 0;
       identifiersBatch.length = 0;
       pricesBatch.length = 0;
+      await db.transaction(async (tx) => {
+        if (pBatch.length) await tx.insert(products).values(pBatch).onConflictDoNothing();
+        if (iBatch.length) await tx.insert(productIdentifiers).values(iBatch).onConflictDoNothing();
+        if (ppBatch.length) await tx.insert(pricePoints).values(ppBatch).onConflictDoNothing();
+      });
     }
 
     rl.on("line", (line) => {
@@ -285,20 +280,27 @@ async function loadCsv(
 
       if (productsBatch.length >= 5000) {
         const batchCount = productsBatch.length;
-        flushBatch();
-        stocked += batchCount;
-        progress(stocked, totalLines, `${category} rows loaded`);
+        rl.pause();
+        flushBatch()
+          .then(() => {
+            stocked += batchCount;
+            progress(stocked, totalLines, `${category} rows loaded`);
+            rl.resume();
+          })
+          .catch(reject);
       }
     });
 
     rl.on("close", () => {
-      if (productsBatch.length) {
-        stocked += productsBatch.length;
-        flushBatch();
-      }
-      progress(totalLines || stocked, totalLines || stocked, `${category} rows loaded`);
-      log("stock", `CSV load complete: ${stocked} products loaded from ${csvPath}`);
-      resolve({ count: stocked, newProducts });
+      const finalCount = productsBatch.length;
+      flushBatch()
+        .then(() => {
+          stocked += finalCount;
+          progress(totalLines || stocked, totalLines || stocked, `${category} rows loaded`);
+          log("stock", `CSV load complete: ${stocked} products loaded from ${csvPath}`);
+          resolve({ count: stocked, newProducts });
+        })
+        .catch(reject);
     });
 
     rl.on("error", reject);
@@ -315,7 +317,7 @@ async function loadCsv(
  * Returns total number of products loaded.
  */
 export async function runStock(config: Config): Promise<number> {
-  seedMarketplaces();
+  await seedMarketplaces();
 
   let total = 0;
   const allNewProducts: { id: string; text: string }[] = [];

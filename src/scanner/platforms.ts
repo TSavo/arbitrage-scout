@@ -41,8 +41,8 @@ function depthOf(pathCache: string): number {
 }
 
 /** Collapse a leaf taxonomy node to its category ancestor (depth ≤ 3). */
-function buildCategoryAncestorMap(): Map<number, { id: number; path: string; label: string }> {
-  const nodes = db.all<{ id: number; parent_id: number | null; path_cache: string; label: string }>(
+async function buildCategoryAncestorMap(): Promise<Map<number, { id: number; path: string; label: string }>> {
+  const nodes = await db.execute<{ id: number; parent_id: number | null; path_cache: string; label: string }>(
     sql`SELECT id, parent_id, path_cache, label FROM taxonomy_nodes`,
   );
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -63,21 +63,21 @@ function buildCategoryAncestorMap(): Map<number, { id: number; path: string; lab
 /**
  * Profile every platform in the catalog, optionally restricted to a taxonomy subtree.
  */
-export function profilePlatforms(
+export async function profilePlatforms(
   opts: { taxonomyPathPrefix?: string; minProducts?: number } = {},
-): PlatformProfile[] {
+): Promise<PlatformProfile[]> {
   const minProducts = opts.minProducts ?? 20;
 
   section("PLATFORM ANALYSIS");
 
-  const ancestorMap = buildCategoryAncestorMap();
+  const ancestorMap = await buildCategoryAncestorMap();
 
   const subtreeFilter = opts.taxonomyPathPrefix
     ? sql`AND t.path_cache LIKE ${opts.taxonomyPathPrefix + "%"}`
     : sql``;
 
   // One aggregate per (platform, taxonomy_node_id). Rolled up in JS below.
-  const raw = db.all<{
+  const raw = await db.execute<{
     platform: string;
     taxonomy_node_id: number;
     product_count: number;
@@ -229,7 +229,7 @@ export function profilePlatforms(
   // Batch median + top5 via window functions — single query for all platforms.
   const medianByPlatform = new Map<string, number>();
   {
-    const rows = db.all<{ platform: string; price_usd: number }>(sql`
+    const rows = await db.execute<{ platform: string; price_usd: number }>(sql`
       WITH ranked AS (
         SELECT
           p.platform,
@@ -247,7 +247,7 @@ export function profilePlatforms(
 
   const top5ByPlatform = new Map<string, Array<{ title: string; loosePrice: number; volume: number }>>();
   {
-    const rows = db.all<{ platform: string; title: string; loose_price: number; volume: number; rn: number }>(sql`
+    const rows = await db.execute<{ platform: string; title: string; loose_price: number; volume: number; rn: number }>(sql`
       WITH ranked AS (
         SELECT
           p.platform,
@@ -302,11 +302,11 @@ export function profilePlatforms(
  * Find undervalued platforms — low prices but high activity.
  * Default scope: retro games (/electronics/video_games/physical_game_media).
  */
-export function findUndervaluedPlatforms(
+export async function findUndervaluedPlatforms(
   opts: { taxonomyPathPrefix?: string } = {},
-): PlatformProfile[] {
+): Promise<PlatformProfile[]> {
   const prefix = opts.taxonomyPathPrefix ?? "/electronics/video_games/physical_game_media";
-  const profiles = profilePlatforms({ taxonomyPathPrefix: prefix, minProducts: 30 });
+  const profiles = await profilePlatforms({ taxonomyPathPrefix: prefix, minProducts: 30 });
 
   const maxVolume = Math.max(...profiles.map((p) => p.avgVolume));
   const maxMedian = Math.max(...profiles.map((p) => p.medianLoose));

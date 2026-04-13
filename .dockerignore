@@ -1,0 +1,13 @@
+node_modules
+.next
+data
+*.log
+.env.local
+.env
+.git
+.github
+.vscode
+.idea
+**/*.test.ts
+test-results
+playwright-report

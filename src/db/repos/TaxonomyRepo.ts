@@ -15,7 +15,7 @@
  */
 
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
-import { db, sqlite } from "../client";
+import { db } from "../client";
 import {
   taxonomyNodes,
   taxonomyNodeFields,
@@ -536,13 +536,11 @@ export class TaxonomyRepo {
   }
 
   /**
-   * Run a set of taxonomy mutations inside a single BEGIN IMMEDIATE
-   * transaction. Callers pass a synchronous function because better-sqlite3
-   * transactions are synchronous; our Drizzle wrappers over better-sqlite3
-   * are fine to call synchronously too.
+   * Run a set of taxonomy mutations inside a single Postgres transaction.
+   * Drizzle's pg driver exposes `db.transaction(async tx => ...)`.
    */
-  runInTransaction<T>(fn: () => T): T {
-    return sqlite.transaction(fn).immediate();
+  async runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    return db.transaction(async () => await fn());
   }
 }
 

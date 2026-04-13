@@ -46,7 +46,7 @@ type Config = Record<string, unknown>;
 /**
  * Seed default marketplaces if they don't exist.
  */
-function seedMarketplaces() {
+async function seedMarketplaces(): Promise<void> {
   const defaults: (typeof marketplaces.$inferInsert)[] = [
     { id: "ebay", name: "eBay", baseUrl: "https://www.ebay.com", supportsApi: true },
     { id: "pricecharting", name: "PriceCharting", baseUrl: "https://www.pricecharting.com", supportsApi: true },
@@ -67,14 +67,13 @@ function seedMarketplaces() {
     { id: "whatnot", name: "Whatnot", baseUrl: "https://www.whatnot.com", supportsApi: false },
   ];
   for (const mp of defaults) {
-    const existing = db
+    const existing = await db
       .select({ id: marketplaces.id })
       .from(marketplaces)
       .where(eq(marketplaces.id, mp.id))
-      .limit(1)
-      .all();
+      .limit(1);
     if (!existing.length) {
-      db.insert(marketplaces).values(mp).run();
+      await db.insert(marketplaces).values(mp);
     }
   }
 }
@@ -98,7 +97,7 @@ export async function runScan(
       ? alertCfg["min_margin_pct"]
       : 30) / 100;
 
-  seedMarketplaces();
+  await seedMarketplaces();
 
   const llm = buildLlm(normCfg);
   const ollamaUrl =
@@ -127,29 +126,27 @@ export async function runScan(
   // Auto-seed any marketplace row missing for an active adapter. Prevents
   // FK crashes when a new adapter is added before the seed list is updated.
   for (const a of available) {
-    const existing = db
+    const existing = await db
       .select({ id: marketplaces.id })
       .from(marketplaces)
       .where(eq(marketplaces.id, a.marketplace_id))
-      .limit(1)
-      .all();
+      .limit(1);
     if (!existing.length) {
       log("scan", `auto-seeding missing marketplace row: ${a.marketplace_id}`);
-      db.insert(marketplaces)
+      await db.insert(marketplaces)
         .values({
           id: a.marketplace_id,
           name: a.marketplace_id,
           baseUrl: "",
           supportsApi: false,
-        })
-        .run();
+        });
     }
   }
 
   // Record per-adapter scan log start.
   const scanLogIds = new Map<string, number>();
   for (const a of available) {
-    scanLogIds.set(a.marketplace_id, startScanLog(db, a.marketplace_id));
+    scanLogIds.set(a.marketplace_id, await startScanLog(db, a.marketplace_id));
     section(`${a.marketplace_id.toUpperCase()} SCAN`);
   }
 
@@ -212,7 +209,7 @@ export async function runScan(
     if (scanLogId) {
       // We don't break down per-adapter counts from the merged stream; log the
       // overall scan totals against each adapter's row. Good enough for now.
-      finishScanLog(
+      await finishScanLog(
         db,
         scanLogId,
         a.discoveryQueries().length,
@@ -224,7 +221,7 @@ export async function runScan(
   }
 
   section("WATCHLIST ALERTS");
-  const alertCount = checkWatchlistAlerts();
+  const alertCount = await checkWatchlistAlerts();
   log("scan", `watchlist: ${alertCount} new alert(s) triggered`);
 
   section("SCAN COMPLETE");

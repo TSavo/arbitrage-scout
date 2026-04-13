@@ -1,4 +1,5 @@
 /** Direct test of the embedding endpoint to isolate whether it's slow/stalled. */
+export {};
 const OLLAMA = process.env.OLLAMA_URL ?? "http://battleaxe:11434";
 
 async function timeOne(text: string, n: number) {

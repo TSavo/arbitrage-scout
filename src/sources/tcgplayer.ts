@@ -80,10 +80,9 @@ export async function loadTcgPlayerPrices(
     // Build a product name map for this category to support name-based fallback matching.
     const nameToProductId = new Map<string, string>();
     try {
-      const allProducts = db
+      const allProducts = await db
         .select({ id: products.id, title: products.title })
-        .from(products)
-        .all();
+        .from(products);
       for (const p of allProducts) {
         nameToProductId.set(normalizeName(p.title), p.id);
       }
@@ -124,7 +123,7 @@ export async function loadTcgPlayerPrices(
         let productId: string | null = null;
 
         try {
-          const byId = db
+          const byId = (await db
             .select({ productId: productIdentifiers.productId })
             .from(productIdentifiers)
             .where(
@@ -133,8 +132,7 @@ export async function loadTcgPlayerPrices(
                 eq(productIdentifiers.identifierValue, String(row.productId)),
               ),
             )
-            .limit(1)
-            .all()[0];
+            .limit(1))[0];
 
           if (byId) {
             productId = byId.productId;
@@ -171,11 +169,7 @@ export async function loadTcgPlayerPrices(
       }
 
       if (batch.length) {
-        db.transaction((tx) => {
-          for (const row of batch) {
-            tx.insert(pricePoints).values(row).onConflictDoNothing().run();
-          }
-        });
+        await db.insert(pricePoints).values(batch).onConflictDoNothing();
         totalInserted += batch.length;
         log(
           "tcgplayer",

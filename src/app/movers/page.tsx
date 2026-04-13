@@ -22,9 +22,9 @@ type SparklineRow = {
 };
 
 const WINDOWS: Record<string, string> = {
-  "7d": "-7 days",
-  "30d": "-30 days",
-  "90d": "-90 days",
+  "7d": "7 days",
+  "30d": "30 days",
+  "90d": "90 days",
 };
 
 export default async function MoversPage(props: {
@@ -40,7 +40,7 @@ export default async function MoversPage(props: {
         ROW_NUMBER() OVER (PARTITION BY pp.product_id, pp.condition ORDER BY pp.recorded_at ASC) as rn_first,
         ROW_NUMBER() OVER (PARTITION BY pp.product_id, pp.condition ORDER BY pp.recorded_at DESC) as rn_last
       FROM price_points pp
-      WHERE pp.recorded_at >= date('now', ${interval})
+      WHERE pp.recorded_at::date >= CURRENT_DATE - (${interval})::interval
         AND pp.condition = 'loose'
         AND pp.price_usd > 0
     )
@@ -67,8 +67,8 @@ export default async function MoversPage(props: {
   let fallers: MoverRow[] = [];
 
   try {
-    risers = db.all(moverQueryBase("DESC")) as MoverRow[];
-    fallers = db.all(moverQueryBase("ASC")) as MoverRow[];
+    risers = await db.execute(moverQueryBase("DESC")) as unknown as MoverRow[];
+    fallers = await db.execute(moverQueryBase("ASC")) as unknown as MoverRow[];
   } catch {
     // Tables might not exist yet
   }
@@ -86,15 +86,15 @@ export default async function MoversPage(props: {
   if (allIds.length > 0) {
     try {
       const idList = sql.join(allIds.map((id) => sql`${id}`), sql`, `);
-      const sparkRows = db.all(sql`
+      const sparkRows = await db.execute(sql`
         SELECT product_id, price_usd, recorded_at
         FROM price_points
         WHERE product_id IN (${idList})
           AND condition = 'loose'
           AND price_usd > 0
-          AND recorded_at >= date('now', ${interval})
+          AND recorded_at::date >= CURRENT_DATE - (${interval})::interval
         ORDER BY product_id, recorded_at ASC
-      `) as SparklineRow[];
+      `) as unknown as SparklineRow[];
 
       for (const row of sparkRows) {
         if (!sparklineMap[row.product_id]) {

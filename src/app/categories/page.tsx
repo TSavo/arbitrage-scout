@@ -24,7 +24,7 @@ export default async function CategoriesPage() {
     // Top-level taxonomy children of the root node. For each parent, count
     // products in its subtree via path_cache prefix match, and aggregate
     // opportunities / avg loose price / sales volume.
-    categories = db.all(sql`
+    categories = (await db.execute(sql`
       SELECT
         parent.id as id,
         parent.label as label,
@@ -47,7 +47,7 @@ export default async function CategoriesPage() {
       WHERE parent.parent_id = (SELECT id FROM taxonomy_nodes WHERE parent_id IS NULL)
       GROUP BY parent.id, parent.label, parent.slug, parent.path_cache
       ORDER BY COUNT(DISTINCT p.id) DESC
-    `) as CategoryStat[];
+    `)) as unknown as CategoryStat[];
   } catch {
     // Tables might not exist yet
   }

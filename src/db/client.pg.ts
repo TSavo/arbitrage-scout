@@ -93,6 +93,20 @@ async function bootstrap() {
   await sql.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_field_enum_value ON taxonomy_node_field_enum_values(field_id, value)`);
 
   await sql.unsafe(`
+    CREATE TABLE IF NOT EXISTS taxonomy_external_refs (
+      id SERIAL PRIMARY KEY,
+      node_id INTEGER NOT NULL REFERENCES taxonomy_nodes(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      external_path TEXT,
+      confidence REAL NOT NULL DEFAULT 1.0,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await sql.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS uq_taxonomy_external_refs ON taxonomy_external_refs(node_id, source)`);
+  await sql.unsafe(`CREATE INDEX IF NOT EXISTS ix_taxonomy_external_refs_lookup ON taxonomy_external_refs(source, external_id)`);
+
+  await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS schema_versions (
       id SERIAL PRIMARY KEY,
       event_type TEXT NOT NULL,
@@ -175,11 +189,13 @@ async function bootstrap() {
       is_lot BOOLEAN NOT NULL DEFAULT FALSE,
       first_seen_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      end_time TEXT
     )
   `);
   await sql.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS uq_listings ON listings(marketplace_id, marketplace_listing_id)`);
   await sql.unsafe(`CREATE INDEX IF NOT EXISTS ix_listings_active ON listings(marketplace_id, is_active)`);
+  await sql.unsafe(`CREATE INDEX IF NOT EXISTS ix_listings_end_time ON listings(end_time)`);
 
   await sql.unsafe(`
     CREATE TABLE IF NOT EXISTS listing_items (
@@ -328,7 +344,8 @@ async function bootstrap() {
   log("db/client.pg", "bootstrap complete");
 }
 
-await bootstrap();
+/** The bootstrap promise — await this before first query to ensure DDL is applied. */
+export const pgReady: Promise<void> = bootstrap();
 
 export const db = drizzle(sql, { schema });
 export { sql };

@@ -15,6 +15,7 @@ async function main(): Promise<void> {
     categoryRaw: "Bourbon",
     priceUsd: 500,
     shippingUsd: 0,
+    url: "https://example.com",
     scrapedAt: Date.now(),
     extra: {},
   });
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
     description: "",
     priceUsd: 1600,
     shippingUsd: 0,
+    url: "https://example.com",
     scrapedAt: Date.now(),
     extra: { ebay_category_id: "27386" },
   });

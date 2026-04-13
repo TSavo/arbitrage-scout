@@ -85,7 +85,7 @@ export default async function CategoryPage(
   };
 
   try {
-    const row = db.get(sql`
+    const rows = (await db.execute(sql`
       SELECT
         COUNT(DISTINCT p.id) as product_count,
         ROUND(AVG(CASE WHEN pp.condition = 'loose' AND pp.recorded_at = (
@@ -100,8 +100,8 @@ export default async function CategoryPage(
       LEFT JOIN price_points pp ON pp.product_id = p.id
       LEFT JOIN opportunities o ON o.product_id = p.id
       WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
-    `) as StatsRow | undefined;
-    if (row) stats = row;
+    `)) as unknown as StatsRow[];
+    if (rows[0]) stats = rows[0];
   } catch {
     // ok
   }
@@ -109,7 +109,7 @@ export default async function CategoryPage(
   // Top movers (last 30 days)
   let movers: (MoverRow & { change_usd: number })[] = [];
   try {
-    movers = db.all(sql`
+    movers = (await db.execute(sql`
       WITH first_last AS (
         SELECT pp.product_id,
           FIRST_VALUE(pp.price_usd) OVER (PARTITION BY pp.product_id ORDER BY pp.recorded_at ASC) as first_price,
@@ -120,7 +120,7 @@ export default async function CategoryPage(
         WHERE (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
           AND pp.condition = 'loose'
           AND pp.price_usd > 0
-          AND pp.recorded_at >= date('now', '-30 days')
+          AND pp.recorded_at::date >= CURRENT_DATE - INTERVAL '30 days'
       )
       SELECT DISTINCT fl.product_id, fl.first_price, fl.last_price,
         ROUND((fl.last_price - fl.first_price) / fl.first_price * 100, 1) as change_pct,
@@ -131,7 +131,7 @@ export default async function CategoryPage(
       WHERE fl.first_price >= 5
       ORDER BY ABS(change_pct) DESC
       LIMIT 10
-    `) as (MoverRow & { change_usd: number })[];
+    `)) as unknown as (MoverRow & { change_usd: number })[];
   } catch {
     // ok
   }
@@ -142,15 +142,15 @@ export default async function CategoryPage(
     try {
       const ids = movers.map((m) => m.product_id);
       const idList = sql.join(ids.map((id) => sql`${id}`), sql`, `);
-      const sparkRows = db.all(sql`
+      const sparkRows = (await db.execute(sql`
         SELECT product_id, price_usd
         FROM price_points
         WHERE product_id IN (${idList})
           AND condition = 'loose'
           AND price_usd > 0
-          AND recorded_at >= date('now', '-30 days')
+          AND recorded_at::date >= CURRENT_DATE - INTERVAL '30 days'
         ORDER BY product_id, recorded_at ASC
-      `) as SparklineRow[];
+      `)) as unknown as SparklineRow[];
 
       for (const row of sparkRows) {
         if (!sparklineMap[row.product_id]) {
@@ -166,7 +166,7 @@ export default async function CategoryPage(
   // Best current deals
   let deals: DealRow[] = [];
   try {
-    deals = db.all(sql`
+    deals = (await db.execute(sql`
       SELECT
         o.product_id,
         p.title,
@@ -186,7 +186,7 @@ export default async function CategoryPage(
         AND (tn.path_cache = ${pathPrefix} OR tn.path_cache LIKE ${subtreeLike})
       ORDER BY o.margin_pct DESC
       LIMIT 15
-    `) as DealRow[];
+    `)) as unknown as DealRow[];
   } catch {
     // ok
   }
@@ -194,7 +194,7 @@ export default async function CategoryPage(
   // Price distribution
   let distribution: BucketRow[] = [];
   try {
-    distribution = db.all(sql`
+    distribution = (await db.execute(sql`
       SELECT
         CASE
           WHEN pp.price_usd < 10 THEN '$0-10'
@@ -213,7 +213,7 @@ export default async function CategoryPage(
         AND pp.condition = 'loose'
         AND pp.recorded_at = (SELECT MAX(recorded_at) FROM price_points WHERE product_id = pp.product_id AND condition = 'loose')
       GROUP BY bucket
-    `) as BucketRow[];
+    `)) as unknown as BucketRow[];
   } catch {
     // ok
   }
@@ -235,7 +235,7 @@ export default async function CategoryPage(
   // Top platforms/sets
   let platforms: PlatformRow[] = [];
   try {
-    platforms = db.all(sql`
+    platforms = (await db.execute(sql`
       SELECT
         p.platform,
         COUNT(DISTINCT p.id) as product_count,
@@ -253,7 +253,7 @@ export default async function CategoryPage(
       HAVING COUNT(DISTINCT p.id) >= 5
       ORDER BY COUNT(DISTINCT p.id) DESC
       LIMIT 30
-    `) as PlatformRow[];
+    `)) as unknown as PlatformRow[];
   } catch {
     // ok
   }

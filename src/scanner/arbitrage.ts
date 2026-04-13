@@ -157,9 +157,9 @@ export async function findCrossMarketplaceDeals(
     .where(
       and(
         eq(listingItems.confirmed, true),
-        sql`li_sell.confirmed = 1`,
+        sql`li_sell.confirmed = TRUE`,
         eq(listings.isActive, true),
-        sql`l_sell.is_active = 1`,
+        sql`l_sell.is_active = TRUE`,
         sql`l_sell.price_usd > ${listings.priceUsd}`,
       ),
     )

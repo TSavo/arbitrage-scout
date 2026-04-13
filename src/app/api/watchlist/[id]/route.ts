@@ -34,10 +34,9 @@ export async function PATCH(
     return Response.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  db.update(watchlistItems)
+  await db.update(watchlistItems)
     .set(updates)
-    .where(eq(watchlistItems.id, numericId))
-    .run();
+    .where(eq(watchlistItems.id, numericId));
 
   return Response.json({ ok: true, id: numericId, ...updates });
 }
@@ -53,7 +52,7 @@ export async function DELETE(
     return Response.json({ error: "Invalid ID" }, { status: 400 });
   }
 
-  db.delete(watchlistItems).where(eq(watchlistItems.id, numericId)).run();
+  await db.delete(watchlistItems).where(eq(watchlistItems.id, numericId));
 
   return Response.json({ ok: true, id: numericId });
 }

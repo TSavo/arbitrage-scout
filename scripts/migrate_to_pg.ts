@@ -46,6 +46,12 @@ interface TableSpec {
   readonly jsonb?: readonly string[];
   /** Table has its own id as SERIAL; after migration, reset seq. */
   readonly serialColumn?: string;
+  /**
+   * Optional WHERE clause appended to the SELECT. Use to filter orphans
+   * (SQLite doesn't enforce FKs, PG does). e.g.
+   *   "WHERE product_id IN (SELECT id FROM products)"
+   */
+  readonly whereClause?: string;
 }
 
 const TABLES: readonly TableSpec[] = [
@@ -68,6 +74,10 @@ const TABLES: readonly TableSpec[] = [
     serialColumn: "id",
   },
   {
+    name: "taxonomy_external_refs",
+    serialColumn: "id",
+  },
+  {
     name: "schema_versions",
     jsonb: ["payload"],
     serialColumn: "id",
@@ -87,6 +97,7 @@ const TABLES: readonly TableSpec[] = [
     name: "price_points",
     jsonb: ["dimensions"],
     serialColumn: "id",
+    whereClause: "WHERE product_id IN (SELECT id FROM products)",
   },
 
   // Listings pipeline.
@@ -100,22 +111,21 @@ const TABLES: readonly TableSpec[] = [
     booleans: ["confirmed"],
     jsonb: ["condition_details", "raw_extraction"],
     serialColumn: "id",
+    whereClause: "WHERE listing_id IN (SELECT id FROM listings) AND product_id IN (SELECT id FROM products)",
   },
-  {
-    name: "opportunities",
-    jsonb: ["flags"],
-    serialColumn: "id",
-  },
+  // Opportunities — SKIPPED. They'll re-discover on the first scan.
 
   // Watchlist / inventory.
   {
     name: "watchlist_items",
     booleans: ["active"],
     serialColumn: "id",
+    whereClause: "WHERE product_id IN (SELECT id FROM products)",
   },
   {
     name: "inventory_items",
     serialColumn: "id",
+    whereClause: "WHERE product_id IS NULL OR product_id IN (SELECT id FROM products)",
   },
 
   // Embeddings metadata (vectors handled separately below).
@@ -130,12 +140,7 @@ const TABLES: readonly TableSpec[] = [
     serialColumn: "id",
   },
 
-  // Scan logs.
-  {
-    name: "scan_logs",
-    booleans: ["rate_limited"],
-    serialColumn: "id",
-  },
+  // scan_logs — SKIPPED. Pure audit trail, rebuilds from here on.
 ];
 
 function coerceRow(row: Record<string, unknown>, spec: TableSpec): Record<string, unknown> {
@@ -170,6 +175,17 @@ function coerceRow(row: Record<string, unknown>, spec: TableSpec): Record<string
   return out;
 }
 
+function bar(pct: number, width = 24): string {
+  const n = Math.min(width, Math.max(0, Math.round(pct * width)));
+  return "[" + "█".repeat(n) + "░".repeat(width - n) + "]";
+}
+function fmtEta(secs: number): string {
+  if (!isFinite(secs) || secs < 0) return "?";
+  const m = Math.floor(secs / 60);
+  const s = Math.round(secs % 60);
+  return m > 0 ? `${m}m${s.toString().padStart(2, "0")}s` : `${s}s`;
+}
+
 async function migrateTable(
   sqlite: Database.Database,
   sql: postgres.Sql,
@@ -177,26 +193,42 @@ async function migrateTable(
 ): Promise<{ rows: number; ms: number }> {
   const pgName = spec.pg ?? spec.name;
   const t0 = Date.now();
-  const total = sqlite.prepare(`SELECT COUNT(*) AS n FROM ${spec.name}`).get() as { n: number };
-  if (total.n === 0) {
-    console.log(`  ${spec.name}: 0 rows (skipping)`);
+  const where = spec.whereClause ? ` ${spec.whereClause}` : "";
+  const total = (sqlite.prepare(`SELECT COUNT(*) AS n FROM ${spec.name}${where}`).get() as { n: number }).n;
+  const rawTotal = (sqlite.prepare(`SELECT COUNT(*) AS n FROM ${spec.name}`).get() as { n: number }).n;
+  const skipped = rawTotal - total;
+  const suffix = skipped > 0 ? `  (${skipped.toLocaleString()} orphans filtered)` : "";
+  console.log(`\n▶ ${spec.name} → ${pgName}  (${total.toLocaleString()} rows)${suffix}`);
+  if (total === 0) {
+    console.log(`  (empty, skipping)`);
     return { rows: 0, ms: 0 };
   }
-  const stmt = sqlite.prepare(`SELECT * FROM ${spec.name}`);
+  const stmt = sqlite.prepare(`SELECT * FROM ${spec.name}${where}`);
   let inserted = 0;
   let buf: Record<string, unknown>[] = [];
+  let lastTick = t0;
+  const render = (): void => {
+    const elapsed = (Date.now() - t0) / 1000;
+    const rps = inserted / Math.max(0.001, elapsed);
+    const eta = (total - inserted) / Math.max(0.1, rps);
+    const pct = inserted / total;
+    const line = `  ${bar(pct)} ${(pct * 100).toFixed(1)}%  ${inserted.toLocaleString()}/${total.toLocaleString()}  ${rps.toFixed(0)} r/s  ETA ${fmtEta(eta)}`;
+    process.stdout.write(`\r${line.padEnd(80)}`);
+  };
   for (const raw of stmt.iterate() as IterableIterator<Record<string, unknown>>) {
     buf.push(coerceRow(raw, spec));
     if (buf.length >= CHUNK) {
       await sql`INSERT INTO ${sql(pgName)} ${sql(buf)} ON CONFLICT DO NOTHING`;
       inserted += buf.length;
       buf = [];
-      process.stdout.write(`\r  ${spec.name}: ${inserted}/${total.n}`);
+      render();
+      lastTick = Date.now();
     }
   }
   if (buf.length) {
     await sql`INSERT INTO ${sql(pgName)} ${sql(buf)} ON CONFLICT DO NOTHING`;
     inserted += buf.length;
+    render();
   }
   // Reset sequence so future serial inserts don't collide.
   if (spec.serialColumn) {
@@ -204,7 +236,9 @@ async function migrateTable(
     await sql.unsafe(`SELECT setval('${seq}', COALESCE((SELECT MAX(${spec.serialColumn}) FROM ${pgName}), 1))`);
   }
   const ms = Date.now() - t0;
-  console.log(`\r  ${spec.name}: ${inserted}/${total.n} in ${(ms / 1000).toFixed(1)}s`);
+  void lastTick;
+  process.stdout.write("\n");
+  console.log(`  ✓ ${inserted.toLocaleString()} rows in ${(ms / 1000).toFixed(1)}s (${(inserted / (ms / 1000)).toFixed(0)} r/s)`);
   return { rows: inserted, ms };
 }
 
@@ -227,20 +261,27 @@ async function migrateEmbeddings(
     console.log(`  vec_embeddings: 0 rows`);
     return;
   }
-  console.log(`  vec_embeddings: copying ${hasVec.n} vectors…`);
+  const total = hasVec.n;
+  console.log(`\n▶ vec_embeddings (sqlite-vec) → vec_embeddings (pgvector)  (${total.toLocaleString()} vectors)`);
   const stmt = sqlite.prepare(
     `SELECT entity_type, entity_id, embedding FROM vec_embeddings`,
   );
   let inserted = 0;
   let buf: Array<{ entity_type: string; entity_id: string; embedding: string }> = [];
   const t0 = Date.now();
+  const render = (): void => {
+    const elapsed = (Date.now() - t0) / 1000;
+    const rps = inserted / Math.max(0.001, elapsed);
+    const eta = (total - inserted) / Math.max(0.1, rps);
+    const pct = inserted / total;
+    const line = `  ${bar(pct)} ${(pct * 100).toFixed(1)}%  ${inserted.toLocaleString()}/${total.toLocaleString()}  ${rps.toFixed(0)} vec/s  ETA ${fmtEta(eta)}`;
+    process.stdout.write(`\r${line.padEnd(80)}`);
+  };
   for (const row of stmt.iterate() as IterableIterator<{
     entity_type: string;
     entity_id: string;
     embedding: Buffer | Float32Array;
   }>) {
-    // sqlite-vec stores as a binary float32 blob; convert to the pgvector
-    // literal "[f1,f2,...]".
     const buf32 =
       row.embedding instanceof Float32Array
         ? row.embedding
@@ -259,15 +300,17 @@ async function migrateEmbeddings(
       await sql`INSERT INTO vec_embeddings ${sql(buf)} ON CONFLICT DO NOTHING`;
       inserted += buf.length;
       buf = [];
-      process.stdout.write(`\r  vec_embeddings: ${inserted}/${hasVec.n}`);
+      render();
     }
   }
   if (buf.length) {
     await sql`INSERT INTO vec_embeddings ${sql(buf)} ON CONFLICT DO NOTHING`;
     inserted += buf.length;
+    render();
   }
   const ms = Date.now() - t0;
-  console.log(`\r  vec_embeddings: ${inserted}/${hasVec.n} in ${(ms / 1000).toFixed(1)}s`);
+  process.stdout.write("\n");
+  console.log(`  ✓ ${inserted.toLocaleString()} vectors in ${(ms / 1000).toFixed(1)}s (${(inserted / (ms / 1000)).toFixed(0)} v/s)`);
 }
 
 async function main() {

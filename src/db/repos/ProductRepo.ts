@@ -88,15 +88,14 @@ export class ProductRepo implements IRepository<Product, string> {
   async findByNode(taxonomyNodeId: number, opts?: FindByNodeOpts): Promise<Product[]> {
     const prefix = await subtreePrefix(taxonomyNodeId);
     if (!prefix) return [];
-    const rows = db
+    const rows = await db
       .select()
       .from(products)
       .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
       .where(like(taxonomyNodes.pathCache, prefix))
       .orderBy(desc(products.salesVolume))
       .limit(opts?.limit ?? 1000)
-      .offset(opts?.offset ?? 0)
-      .all();
+      .offset(opts?.offset ?? 0);
     return rows.map((r) => r.products);
   }
 
@@ -128,14 +127,13 @@ export class ProductRepo implements IRepository<Product, string> {
     }
 
     if (prefix) {
-      const rows = db
+      const rows = await db
         .select()
         .from(products)
         .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
         .where(and(like(taxonomyNodes.pathCache, prefix), ...conditions))
         .orderBy(desc(products.salesVolume))
-        .limit(limit)
-        .all();
+        .limit(limit);
       return rows.map((r) => r.products);
     }
 
@@ -156,15 +154,14 @@ export class ProductRepo implements IRepository<Product, string> {
     if (opts?.taxonomyNodeId !== undefined) {
       const prefix = await subtreePrefix(opts.taxonomyNodeId);
       if (!prefix) return [];
-      const rows = db
+      const rows = await db
         .select()
         .from(products)
         .innerJoin(taxonomyNodes, eq(products.taxonomyNodeId, taxonomyNodes.id))
         .where(and(like(products.title, pattern), like(taxonomyNodes.pathCache, prefix)))
         .orderBy(desc(products.salesVolume))
         .limit(opts?.limit ?? 20)
-        .offset(opts?.offset ?? 0)
-        .all();
+        .offset(opts?.offset ?? 0);
       return rows.map((r) => r.products);
     }
 

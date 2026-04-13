@@ -24,6 +24,24 @@ import { WoodenCorkAdapter } from "./woodencork";
 import { CaskCartelAdapter } from "./caskcartel";
 import { WhiskyBusinessAdapter } from "./whiskybusiness";
 import { FlaviarAdapter } from "./flaviar";
+import { MashAndGrapeAdapter } from "./mashandgrape";
+import { DekantaAdapter } from "./dekanta";
+import { LastBottleWinesAdapter } from "./lastbottlewines";
+import { TrollAndToadAdapter } from "./trollandtoad";
+import { MinifigsAdapter } from "./minifigs";
+import { TeddyBaldassarreAdapter } from "./teddybaldassarre";
+import { WindupWatchShopAdapter } from "./windupwatchshop";
+import { PlugTechAdapter } from "./plugtech";
+import { GouletPensAdapter } from "./gouletpens";
+import { SipWhiskeyAdapter } from "./sipwhiskey";
+import { WatchGeckoAdapter } from "./watchgecko";
+import { AtlanticKnifeAdapter } from "./atlanticknife";
+import { UpscaleAudioAdapter } from "./upscaleaudio";
+import { PinkGorillaAdapter } from "./pinkgorilla";
+import { RetroGameBoyzAdapter } from "./retrogameboyz";
+import { SneakerPoliticsAdapter } from "./sneakerpolitics";
+import { WildwoodGuitarsAdapter } from "./wildwoodguitars";
+import { ChicagoMusicExchangeAdapter } from "./chicagomusicexchange";
 import { log } from "@/lib/logger";
 
 export interface EbayAdapterConfig {
@@ -74,6 +92,25 @@ export interface AdapterConfig {
   whiskybusiness?: { enabled?: boolean };
   /** Flaviar — curated spirits retailer (Shopify) */
   flaviar?: { enabled?: boolean };
+  // Batch 2 Shopify-backed retailers (no auth)
+  mashandgrape?: { enabled?: boolean };
+  dekanta?: { enabled?: boolean };
+  lastbottlewines?: { enabled?: boolean };
+  trollandtoad?: { enabled?: boolean };
+  minifigs?: { enabled?: boolean };
+  teddybaldassarre?: { enabled?: boolean };
+  windupwatchshop?: { enabled?: boolean };
+  plugtech?: { enabled?: boolean };
+  gouletpens?: { enabled?: boolean };
+  sipwhiskey?: { enabled?: boolean };
+  watchgecko?: { enabled?: boolean };
+  atlanticknife?: { enabled?: boolean };
+  upscaleaudio?: { enabled?: boolean };
+  pinkgorilla?: { enabled?: boolean };
+  retrogameboyz?: { enabled?: boolean };
+  sneakerpolitics?: { enabled?: boolean };
+  wildwoodguitars?: { enabled?: boolean };
+  chicagomusicexchange?: { enabled?: boolean };
 }
 
 /**
@@ -130,13 +167,18 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     log("registry", "DiscogsAdapter skipped (disabled in config)");
   }
 
+  // CDP-dependent adapters — they connect to a headed Chrome on
+  // 127.0.0.1:9222. Disable in headless container deployments by setting
+  // CDP_ADAPTERS_ENABLED=false.
+  const cdpDisabled = process.env.CDP_ADAPTERS_ENABLED === "false";
+
   // HiBid — no credentials needed, uses Playwright for Cloudflare bypass
   const hibidCfg = cfg.hibid ?? {};
-  if (hibidCfg.enabled !== false) {
+  if (hibidCfg.enabled !== false && !cdpDisabled) {
     adapters.push(new HiBidAdapter());
     log("registry", "built HiBidAdapter (Playwright + GraphQL)");
   } else {
-    log("registry", "HiBidAdapter skipped (disabled in config)");
+    log("registry", `HiBidAdapter skipped (${cdpDisabled ? "no CDP available" : "disabled in config"})`);
   }
 
   // TCGPlayer marketplace search — no credentials needed
@@ -150,36 +192,40 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
 
   // Mercari — no credentials needed, uses Playwright for API interception
   const mercariCfg = cfg.mercari ?? {};
-  if (mercariCfg.enabled !== false) {
+  if (mercariCfg.enabled !== false && !cdpDisabled) {
     adapters.push(new MercariAdapter());
     log("registry", "built MercariAdapter (Playwright + API interception)");
   } else {
-    log("registry", "MercariAdapter skipped (disabled in config)");
+    log("registry", `MercariAdapter skipped (${cdpDisabled ? "no CDP available" : "disabled in config"})`);
   }
 
   // LiveAuctioneers — no credentials needed, public search API
   const laCfg = cfg.liveauctioneers ?? {};
-  if (laCfg.enabled !== false) {
+  if (laCfg.enabled !== false && !cdpDisabled) {
     adapters.push(new LiveAuctioneersAdapter());
     log("registry", "built LiveAuctioneersAdapter (no-auth; public search API)");
   } else {
-    log("registry", "LiveAuctioneersAdapter skipped (disabled in config)");
+    log("registry", `LiveAuctioneersAdapter skipped (${cdpDisabled ? "no CDP available" : "disabled in config"})`);
   }
 
   // Whatnot — no credentials needed, uses Playwright for GraphQL interception
   const whatnotCfg = cfg.whatnot ?? {};
-  if (whatnotCfg.enabled !== false) {
+  if (whatnotCfg.enabled !== false && !cdpDisabled) {
     adapters.push(new WhatnotAdapter());
     log("registry", "built WhatnotAdapter (Playwright + GraphQL)");
   } else {
-    log("registry", "WhatnotAdapter skipped (disabled in config)");
+    log("registry", `WhatnotAdapter skipped (${cdpDisabled ? "no CDP available" : "disabled in config"})`);
   }
 
   // K&L Wines — enabled by default; KlwinesAdapter.isAvailable() returns false
   // when the session dir doesn't exist (i.e. user hasn't run the login script),
   // and search() degrades to [] if Chrome isn't on the CDP port.
   const klCfg = cfg.klwines ?? {};
-  if (klCfg.enabled !== false) {
+  // env override — KLWINES_ENABLED=false disables the adapter for
+  // headless deployments (Docker on battleaxe) where there's no headed
+  // Chrome with logged-in K&L cookies.
+  const klEnvDisabled = process.env.KLWINES_ENABLED === "false";
+  if (klCfg.enabled !== false && !klEnvDisabled) {
     const kl = new KlwinesAdapter({
       userDataDir: klCfg.userDataDir,
       cdpPort: klCfg.cdpPort,
@@ -203,6 +249,24 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
     ["CaskCartel",        "caskcartel",        () => new CaskCartelAdapter()],
     ["WhiskyBusiness",    "whiskybusiness",    () => new WhiskyBusinessAdapter()],
     ["Flaviar",           "flaviar",           () => new FlaviarAdapter()],
+    ["MashAndGrape",      "mashandgrape",      () => new MashAndGrapeAdapter()],
+    ["Dekanta",           "dekanta",           () => new DekantaAdapter()],
+    ["LastBottleWines",   "lastbottlewines",   () => new LastBottleWinesAdapter()],
+    ["TrollAndToad",      "trollandtoad",      () => new TrollAndToadAdapter()],
+    ["Minifigs",          "minifigs",          () => new MinifigsAdapter()],
+    ["TeddyBaldassarre",  "teddybaldassarre",  () => new TeddyBaldassarreAdapter()],
+    ["WindupWatchShop",   "windupwatchshop",   () => new WindupWatchShopAdapter()],
+    ["PlugTech",          "plugtech",          () => new PlugTechAdapter()],
+    ["GouletPens",        "gouletpens",        () => new GouletPensAdapter()],
+    ["SipWhiskey",        "sipwhiskey",        () => new SipWhiskeyAdapter()],
+    ["WatchGecko",        "watchgecko",        () => new WatchGeckoAdapter()],
+    ["AtlanticKnife",     "atlanticknife",     () => new AtlanticKnifeAdapter()],
+    ["UpscaleAudio",      "upscaleaudio",      () => new UpscaleAudioAdapter()],
+    ["PinkGorilla",       "pinkgorilla",       () => new PinkGorillaAdapter()],
+    ["RetroGameBoyz",     "retrogameboyz",     () => new RetroGameBoyzAdapter()],
+    ["SneakerPolitics",   "sneakerpolitics",   () => new SneakerPoliticsAdapter()],
+    ["WildwoodGuitars",   "wildwoodguitars",   () => new WildwoodGuitarsAdapter()],
+    ["ChicagoMusicExchange", "chicagomusicexchange", () => new ChicagoMusicExchangeAdapter()],
   ];
   for (const [name, key, factory] of shopifyStores) {
     const conf = (cfg[key] as { enabled?: boolean } | undefined) ?? {};

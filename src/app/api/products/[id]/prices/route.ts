@@ -10,7 +10,7 @@ export async function GET(
 ) {
   const { id } = await ctx.params;
 
-  const rows = db
+  const rows = await db
     .select({
       source: pricePoints.source,
       condition: pricePoints.condition,
@@ -19,8 +19,7 @@ export async function GET(
     })
     .from(pricePoints)
     .where(eq(pricePoints.productId, id))
-    .orderBy(asc(pricePoints.recordedAt))
-    .all();
+    .orderBy(asc(pricePoints.recordedAt));
 
   return Response.json(rows);
 }
