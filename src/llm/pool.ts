@@ -198,18 +198,19 @@ export function ollamaProvider(opts: {
 export function openRouterProvider(opts: {
   readonly apiKey: string;
   readonly model: string;
-  /** Optional override for display name / mutex key. */
+  /** Optional override for display name. */
   readonly name?: string;
+  /** Optional override for mutex key. Default shares a single "openrouter"
+   *  bucket (correct for free-tier rate-limit sharing). On paid tier, pass
+   *  a per-slot key to unlock true parallelism. */
+  readonly serializeKey?: string;
   readonly priority?: number;
 }): LlmProviderConfig {
   const name = opts.name ?? `openrouter:${opts.model}`;
   return {
     name,
     url: "https://openrouter.ai/api/v1/chat/completions",
-    // All OpenRouter free-tier calls share ONE 20/min rate-limit bucket
-    // regardless of model. Use a single serializeKey so the mutex
-    // coordinates across all providers (see MIN_GAP_MS for pacing).
-    serializeKey: "openrouter",
+    serializeKey: opts.serializeKey ?? "openrouter",
     priority: opts.priority ?? 10, // Prefer Ollama by default.
     headers: {
       Authorization: `Bearer ${opts.apiKey}`,
@@ -249,10 +250,24 @@ export function buildDefaultPool(): LlmPool {
   ];
   const orKey = process.env.OPENROUTER_API_KEY;
   if (orKey) {
-    const models = (process.env.OPENROUTER_MODELS ?? "openai/gpt-oss-120b:free,minimax/minimax-m2.5:free,openai/gpt-oss-20b:free")
+    const models = (process.env.OPENROUTER_MODELS ?? "openai/gpt-oss-120b,openai/gpt-oss-20b")
       .split(",").map((m) => m.trim()).filter(Boolean);
+    // On paid tier there's no shared-bucket throttle, so we can drive N
+    // concurrent calls per model. OPENROUTER_PARALLEL sets the slot count
+    // per model (default 10). Each slot gets its own serializeKey so the
+    // pool's mutex doesn't collapse them into a single lane.
+    const parallelPerModel = Math.max(1, parseInt(process.env.OPENROUTER_PARALLEL ?? "10", 10));
     for (const m of models) {
-      providers.push(openRouterProvider({ apiKey: orKey, model: m }));
+      for (let slot = 0; slot < parallelPerModel; slot++) {
+        providers.push(
+          openRouterProvider({
+            apiKey: orKey,
+            model: m,
+            name: `openrouter:${m}#${slot}`,
+            serializeKey: `openrouter:${m}:${slot}`,
+          }),
+        );
+      }
     }
   }
   return new LlmPool(providers);
