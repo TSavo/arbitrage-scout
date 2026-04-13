@@ -34,6 +34,10 @@ import { getSharedContext } from "@/lib/shared_browser";
 import { log, section, skip, error as logError } from "@/lib/logger";
 import type { Page } from "playwright";
 import { generateId } from "@/pipeline/utils";
+import { classify } from "@/pipeline/commands/classify";
+import { buildDefaultPool } from "@/llm/pool";
+import type { LlmClient } from "@/llm/pool";
+import type { RawListing } from "@/pipeline/types";
 
 const BASE = "https://www.klwines.com";
 const ALERT_PCT = 20; // watchlist fires when current >= purchase * 1.20
@@ -112,9 +116,12 @@ async function scrapeProduct(page: Page, sku: string): Promise<ScrapedProduct | 
       }
       return '';
     })();
-    details.origin = detailText.match(/Origin:\\s*([^A-Z][^:]*?)(?=[A-Z][a-z]+:|$)/)?.[1]?.trim();
-    details.varietal = detailText.match(/Type\\/Varietal:\\s*([^A-Z][^:]*?)(?=[A-Z][a-z]+:|$)/)?.[1]?.trim();
-    details.alcoholContent = detailText.match(/Alcohol Content:\\s*([\\d.]+%?)/)?.[1]?.trim();
+    // Each field is concatenated with no separator; use explicit next-label
+    // lookaheads to know where to stop. Fields: Origin, Type/Varietal,
+    // Alcohol Content, SKU.
+    details.origin = detailText.match(/Origin:\\s*(.+?)\\s*(?=Type\\/Varietal:|Alcohol Content:|SKU:|$)/)?.[1]?.trim();
+    details.varietal = detailText.match(/Type\\/Varietal:\\s*(.+?)\\s*(?=Alcohol Content:|SKU:|Origin:|$)/)?.[1]?.trim();
+    details.alcoholContent = detailText.match(/Alcohol Content:\\s*([\\d.]+\\s*%)/)?.[1]?.replace(/\\s+/g,'');
     return { jsonLd, details };
   })()`) as { jsonLd: KlwinesJsonLd; details: { origin?: string; varietal?: string; alcoholContent?: string } };
   if (!data.jsonLd || !data.jsonLd.name) return null;
@@ -141,35 +148,68 @@ function offerPrice(jsonLd: KlwinesJsonLd): { price: number | null; inStock: boo
  * node whose label or path_cache contains "bourbon". Best-effort; falls
  * through to null if no clean match.
  */
-async function resolveTaxonomyNode(category: string | undefined): Promise<number | null> {
-  if (!category) return null;
-  // Take the deepest segment first: "Bourbon and Rye" from "Bourbon and Rye / Distilled Spirits".
-  const segments = category.split("/").map((s) => s.trim()).filter(Boolean);
-  for (const seg of segments) {
-    const slug = seg
-      .toLowerCase()
-      .replace(/&/g, "and")
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
-    const hit = await db.query.taxonomyNodes.findFirst({
-      where: eq(taxonomyNodes.slug, slug),
-      columns: { id: true },
-    });
-    if (hit) return hit.id;
-    // Try singular forms too
-    const alt = slug.replace(/_and_/g, "_").replace(/s$/, "");
-    const hit2 = await db.query.taxonomyNodes.findFirst({
-      where: eq(taxonomyNodes.slug, alt),
-      columns: { id: true },
-    });
-    if (hit2) return hit2.id;
+/**
+ * Run the full LLM taxonomy walk on the scraped JSON-LD. We build a
+ * synthetic RawListing from the structured fields (category + description
+ * + review form a richer context than any auction title) and feed the
+ * classify command, which handles the whole descent through the taxonomy
+ * tree with schema growth. Returns the leaf node id.
+ */
+async function classifyFromJsonLd(
+  sku: string,
+  scraped: ScrapedProduct,
+  llm: LlmClient | null,
+): Promise<number | null> {
+  if (!llm) return null;
+  const { jsonLd } = scraped;
+  // Synthesize a rich description from all the structured signals.
+  const descParts: string[] = [];
+  if (jsonLd.category) descParts.push(`Category: ${jsonLd.category}`);
+  if (scraped.varietal) descParts.push(`Type/Varietal: ${scraped.varietal}`);
+  if (scraped.origin) descParts.push(`Origin: ${scraped.origin}`);
+  if (jsonLd.countryOfOrigin) descParts.push(`Country: ${jsonLd.countryOfOrigin}`);
+  if (scraped.alcoholContent) descParts.push(`Alcohol: ${scraped.alcoholContent}`);
+  if (jsonLd.size) descParts.push(`Size: ${jsonLd.size}`);
+  if (jsonLd.description) descParts.push(`\n${jsonLd.description}`);
+  const review = jsonLd.review?.[0];
+  if (review?.reviewBody) descParts.push(`\nReview by ${review.author?.name ?? "critic"}: ${review.reviewBody}`);
+
+  const listing: RawListing = Object.freeze({
+    marketplaceId: "klwines",
+    listingId: `enrich:${sku}`,
+    title: jsonLd.name ?? "",
+    description: descParts.join("\n"),
+    categoryRaw: jsonLd.category,
+    priceUsd: 0,
+    shippingUsd: 0,
+    url: `https://shop.klwines.com/products/details/${sku}`,
+    scrapedAt: Date.now(),
+    extra: { klwines_sku: sku },
+  });
+  const extractedFields: Record<string, unknown> = {};
+  if (scraped.varietal) extractedFields.varietal = scraped.varietal;
+  if (scraped.origin) extractedFields.origin = scraped.origin;
+  if (scraped.alcoholContent) extractedFields.alcohol_content = scraped.alcoholContent;
+  if (jsonLd.countryOfOrigin) extractedFields.country_of_origin = jsonLd.countryOfOrigin;
+  if (jsonLd.size) extractedFields.size = jsonLd.size;
+  try {
+    const result = await classify({ listing, extractedFields, llmClient: llm });
+    const leaf = result.path[result.path.length - 1];
+    return leaf?.id ?? null;
+  } catch (err) {
+    logError("enrich-kl", `classify failed: ${(err as Error).message.slice(0, 100)}`);
+    return null;
   }
-  return null;
 }
+
+// Compat shim kept for the unused `taxonomyNodes` import below. Remove when unused.
+async function _noop(): Promise<void> { void taxonomyNodes; }
+void _noop;
 
 async function upsertProductFromJsonLd(
   sku: string,
   scraped: ScrapedProduct,
+  llm: LlmClient | null,
 ): Promise<{ productId: string; isNew: boolean }> {
   // 1. Existing product via klwines_sku identifier?
   const existingId = await db.query.productIdentifiers.findFirst({
@@ -181,7 +221,7 @@ async function upsertProductFromJsonLd(
   });
   const now = new Date().toISOString();
   const { jsonLd } = scraped;
-  const taxonomyNodeId = await resolveTaxonomyNode(jsonLd.category);
+  const taxonomyNodeId = await classifyFromJsonLd(sku, scraped, llm);
   const metadata: Record<string, unknown> = {
     klwines_sku: sku,
     category: jsonLd.category,
@@ -296,9 +336,17 @@ export async function enrichKlwines(): Promise<{
       ),
     )
     .orderBy(sql`RANDOM()`)
+    .limit(Number(process.env.ENRICH_LIMIT) || 100_000)
     .all();
 
   log("enrich-kl", `${rows.length} inventory rows with klwines SKU`);
+
+  let llm: LlmClient | null = null;
+  try {
+    llm = buildDefaultPool();
+  } catch (err) {
+    skip("enrich-kl", `LLM pool unavailable (${(err as Error).message}) — taxonomy classification will be skipped`);
+  }
 
   const ctx = await getSharedContext();
   const page =
@@ -328,7 +376,7 @@ export async function enrichKlwines(): Promise<{
         continue;
       }
       scraped++;
-      const { productId, isNew } = await upsertProductFromJsonLd(sku, product);
+      const { productId, isNew } = await upsertProductFromJsonLd(sku, product, llm);
       if (isNew) newProducts++;
       // Link inventory row → canonical product.
       if (!row.productId) {
