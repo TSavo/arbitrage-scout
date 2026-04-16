@@ -224,12 +224,12 @@ export class ProductRepo implements IRepository<Product, string> {
       nodeId: r.nodeId ?? null,
       nodeLabel: r.nodeLabel ?? "",
       nodePath: r.nodePath ?? "",
-      productCount: r.productCount,
-      avgLoose: r.avgLoose,
-      totalVolume: r.totalVolume,
-      avgVolume: r.avgVolume,
-      pctAbove50: r.pctAbove50,
-      pctAbove100: r.pctAbove100,
+      productCount: Number(r.productCount),
+      avgLoose: Number(r.avgLoose),
+      totalVolume: Number(r.totalVolume),
+      avgVolume: Number(r.avgVolume),
+      pctAbove50: Number(r.pctAbove50),
+      pctAbove100: Number(r.pctAbove100),
     }));
   }
 }
