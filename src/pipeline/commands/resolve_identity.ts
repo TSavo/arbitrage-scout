@@ -72,7 +72,12 @@ export async function resolveIdentity(
     "product_name",
   ]);
   const title = titleFromFields ?? input.listing.title;
-  const threshold = input.embeddingThreshold ?? 0.88;
+  // 0.95 is intentionally aggressive — 0.88 catastrophically collapsed 731
+  // distinct listings (Pappy, Van Winkle, Bardstown Fusion, Willett) into
+  // a single "Jack Daniel's Tanyard Hill" anchor product. Ollama qwen3
+  // embeddings put any two bourbons too close together to rely on loose
+  // similarity alone; must pair with brand-agreement gate below.
+  const threshold = input.embeddingThreshold ?? 0.95;
 
   // 1 — External identifier from extra.
   const extra = input.listing.extra ?? {};
@@ -126,6 +131,11 @@ export async function resolveIdentity(
   }
 
   // 3 — Embedding similarity within the node.
+  //     Gated by brand-agreement: if the current listing extracted a brand
+  //     and the candidate product's metadata has a brand, they must match
+  //     (case-insensitive). This prevents the anchor-product collapse we
+  //     saw where every bourbon got matched to one "Jack Daniel's
+  //     Tanyard Hill" product because cosine sim stayed above 0.88.
   try {
     const queryText = buildEmbeddingText(title, input.fields);
     const vec = await embeddingRepo.getOrCompute(
@@ -135,27 +145,32 @@ export async function resolveIdentity(
       input.ollamaUrl,
     );
     if (vec && vec.length > 0) {
+      const listingBrand = stringField(input.fields, ["brand"])?.toLowerCase();
       const neighbors = await embeddingRepo.findSimilar("product", vec, 10);
       for (const n of neighbors) {
-        // Cosine sim ≈ 1 - (distance / 2) for L2-normalized vectors; but
-        // sqlite-vec MATCH can return either cosine distance or L2. We
-        // conservatively treat (1 - distance) >= threshold as a hit.
+        // pgvector cosine distance: 0 identical, 2 opposite.
         const sim = 1 - n.distance;
         if (sim < threshold) continue;
-        // Must be in the same taxonomy node.
         const prod = await db.query.products.findFirst({
           where: eq(products.id, n.entityId),
-          columns: { id: true, taxonomyNodeId: true },
+          columns: { id: true, taxonomyNodeId: true, metadata: true },
         });
         if (!prod) continue;
-        if (prod.taxonomyNodeId === input.node.id) {
-          return Object.freeze({
-            productId: prod.id,
-            isNew: false,
-            method: "embedding" as const,
-            title,
-          });
+        if (prod.taxonomyNodeId !== input.node.id) continue;
+        // Brand-agreement gate
+        if (listingBrand) {
+          const prodBrand = (prod.metadata as Record<string, unknown> | null)
+            ?.["brand"];
+          if (typeof prodBrand === "string" && prodBrand.toLowerCase() !== listingBrand) {
+            continue;
+          }
         }
+        return Object.freeze({
+          productId: prod.id,
+          isNew: false,
+          method: "embedding" as const,
+          title,
+        });
       }
     }
   } catch {

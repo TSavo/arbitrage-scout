@@ -77,7 +77,7 @@ export async function profilePlatforms(
     : sql``;
 
   // One aggregate per (platform, taxonomy_node_id). Rolled up in JS below.
-  const raw = await db.execute<{
+  const rawResult = await db.execute<{
     platform: string;
     taxonomy_node_id: number;
     product_count: number;
@@ -93,17 +93,17 @@ export async function profilePlatforms(
     SELECT
       p.platform,
       p.taxonomy_node_id,
-      COUNT(DISTINCT p.id) as product_count,
-      ROUND(AVG(pp_loose.price_usd), 2) as avg_loose,
-      ROUND(AVG(pp_cib.price_usd), 2) as avg_cib,
-      ROUND(AVG(pp_new.price_usd), 2) as avg_new,
-      SUM(p.sales_volume) as total_volume,
-      ROUND(AVG(p.sales_volume), 1) as avg_volume,
-      ROUND(SUM(CASE WHEN pp_loose.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0
-            / NULLIF(COUNT(pp_loose.price_usd), 0), 1) as pct_50,
-      ROUND(SUM(CASE WHEN pp_loose.price_usd >= 100 THEN 1 ELSE 0 END) * 100.0
-            / NULLIF(COUNT(pp_loose.price_usd), 0), 1) as pct_100,
-      COUNT(pp_loose.price_usd) as loose_count
+      CAST(COUNT(DISTINCT p.id) AS int) as product_count,
+      CAST(ROUND(CAST(AVG(pp_loose.price_usd) AS numeric), 2) AS real) as avg_loose,
+      CAST(ROUND(CAST(AVG(pp_cib.price_usd) AS numeric), 2) AS real) as avg_cib,
+      CAST(ROUND(CAST(AVG(pp_new.price_usd) AS numeric), 2) AS real) as avg_new,
+      CAST(COALESCE(SUM(p.sales_volume), 0) AS int) as total_volume,
+      CAST(ROUND(CAST(AVG(p.sales_volume) AS numeric), 1) AS real) as avg_volume,
+      CAST(ROUND(CAST(SUM(CASE WHEN pp_loose.price_usd >= 50 THEN 1 ELSE 0 END) * 100.0
+            / NULLIF(COUNT(pp_loose.price_usd), 0) AS numeric), 1) AS real) as pct_50,
+      CAST(ROUND(CAST(SUM(CASE WHEN pp_loose.price_usd >= 100 THEN 1 ELSE 0 END) * 100.0
+            / NULLIF(COUNT(pp_loose.price_usd), 0) AS numeric), 1) AS real) as pct_100,
+      CAST(COUNT(pp_loose.price_usd) AS int) as loose_count
     FROM products p
     JOIN taxonomy_nodes t ON t.id = p.taxonomy_node_id
     LEFT JOIN price_points pp_loose ON pp_loose.product_id = p.id
@@ -116,6 +116,7 @@ export async function profilePlatforms(
       ${subtreeFilter}
     GROUP BY p.platform, p.taxonomy_node_id
   `);
+  const raw = [...rawResult].map((r) => ({ ...r }));
 
   // Roll up by (platform, category_ancestor). One platform's products may
   // scatter across multiple leaves; we pick the ancestor with the most
@@ -229,7 +230,7 @@ export async function profilePlatforms(
   // Batch median + top5 via window functions — single query for all platforms.
   const medianByPlatform = new Map<string, number>();
   {
-    const rows = await db.execute<{ platform: string; price_usd: number }>(sql`
+    const rows = [...await db.execute<{ platform: string; price_usd: number }>(sql`
       WITH ranked AS (
         SELECT
           p.platform,
@@ -240,14 +241,14 @@ export async function profilePlatforms(
         JOIN products p ON p.id = pp.product_id
         WHERE pp.condition = 'loose' AND pp.price_usd > 0
       )
-      SELECT platform, price_usd FROM ranked WHERE rn = (n + 1) / 2
-    `);
+      SELECT platform, CAST(price_usd AS real) FROM ranked WHERE rn = (n + 1) / 2
+    `)];
     for (const r of rows) medianByPlatform.set(r.platform, r.price_usd);
   }
 
   const top5ByPlatform = new Map<string, Array<{ title: string; loosePrice: number; volume: number }>>();
   {
-    const rows = await db.execute<{ platform: string; title: string; loose_price: number; volume: number; rn: number }>(sql`
+    const rows = [...await db.execute<{ platform: string; title: string; loose_price: number; volume: number; rn: number }>(sql`
       WITH ranked AS (
         SELECT
           p.platform,
@@ -259,8 +260,8 @@ export async function profilePlatforms(
         JOIN price_points pp ON pp.product_id = p.id
         WHERE pp.condition = 'loose' AND pp.price_usd > 0
       )
-      SELECT platform, title, loose_price, volume, rn FROM ranked WHERE rn <= 5
-    `);
+      SELECT platform, title, CAST(loose_price AS real), CAST(volume AS int), CAST(rn AS int) FROM ranked WHERE rn <= 5
+    `)];
     for (const r of rows) {
       let arr = top5ByPlatform.get(r.platform);
       if (!arr) { arr = []; top5ByPlatform.set(r.platform, arr); }

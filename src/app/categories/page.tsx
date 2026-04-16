@@ -24,19 +24,19 @@ export default async function CategoriesPage() {
     // Top-level taxonomy children of the root node. For each parent, count
     // products in its subtree via path_cache prefix match, and aggregate
     // opportunities / avg loose price / sales volume.
-    categories = (await db.execute(sql`
+    const raw = await db.execute(sql`
       SELECT
         parent.id as id,
         parent.label as label,
         parent.slug as slug,
         parent.path_cache as path_cache,
-        COUNT(DISTINCT p.id) as product_count,
-        COUNT(DISTINCT CASE WHEN o.status = 'new' THEN o.id END) as opportunity_count,
-        ROUND(AVG(CASE WHEN pp.condition = 'loose' AND pp.recorded_at = (
+        CAST(COUNT(DISTINCT p.id) AS int) as product_count,
+        CAST(COUNT(DISTINCT CASE WHEN o.status = 'new' THEN o.id END) AS int) as opportunity_count,
+        CAST(ROUND(CAST(AVG(CASE WHEN pp.condition = 'loose' AND pp.recorded_at = (
           SELECT MAX(pp2.recorded_at) FROM price_points pp2
           WHERE pp2.product_id = p.id AND pp2.condition = 'loose'
-        ) THEN pp.price_usd END), 2) as avg_loose,
-        COALESCE(SUM(p.sales_volume), 0) as total_volume
+        ) THEN pp.price_usd END) AS numeric), 2) AS real) as avg_loose,
+        CAST(COALESCE(SUM(p.sales_volume), 0) AS int) as total_volume
       FROM taxonomy_nodes parent
       LEFT JOIN taxonomy_nodes child
         ON child.path_cache = parent.path_cache
@@ -47,9 +47,10 @@ export default async function CategoriesPage() {
       WHERE parent.parent_id = (SELECT id FROM taxonomy_nodes WHERE parent_id IS NULL)
       GROUP BY parent.id, parent.label, parent.slug, parent.path_cache
       ORDER BY COUNT(DISTINCT p.id) DESC
-    `)) as unknown as CategoryStat[];
-  } catch {
-    // Tables might not exist yet
+    `);
+    categories = [...raw].map((r) => ({ ...r })) as CategoryStat[];
+  } catch (err) {
+    console.error("categories query failed:", err);
   }
 
   return (

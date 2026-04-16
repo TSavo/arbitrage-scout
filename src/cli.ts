@@ -158,7 +158,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // postgres-js (and playwright) hold the event loop open; force a clean
+    // exit so daily-scan.sh moves on to the next step.
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error("Fatal:", err);
+    process.exit(1);
+  });

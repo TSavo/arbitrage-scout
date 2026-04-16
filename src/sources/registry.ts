@@ -122,8 +122,15 @@ export interface AdapterConfig {
 export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
   const adapters: IMarketplaceAdapter[] = [];
 
+  // HEADLESS_ADAPTERS_ENABLED=false disables all adapters that DON'T need
+  // headed Chrome (eBay, ShopGoodwill, PriceCharting, Discogs, TCGPlayer,
+  // all Shopify stores). Use this on the Mac when the battleaxe container
+  // is handling those — leaving Mac to run only the CDP adapters
+  // (klwines, hibid, mercari, liveauctioneers, whatnot).
+  const headlessDisabled = process.env.HEADLESS_ADAPTERS_ENABLED === "false";
+
   const ebayCfg = cfg.ebay ?? {};
-  if (ebayCfg.app_id && ebayCfg.cert_id) {
+  if (!headlessDisabled && ebayCfg.app_id && ebayCfg.cert_id) {
     adapters.push(
       new EbayAdapter({
         app_id: ebayCfg.app_id,
@@ -138,7 +145,7 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
   }
 
   const sgwCfg = cfg.shopgoodwill ?? {};
-  if (sgwCfg.username && sgwCfg.password) {
+  if (!headlessDisabled && sgwCfg.username && sgwCfg.password) {
     adapters.push(
       new ShopGoodwillAdapter({
         username: sgwCfg.username,
@@ -151,7 +158,7 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
   }
 
   const pcKey = cfg.pricecharting?.api_key ?? "";
-  if (pcKey) {
+  if (!headlessDisabled && pcKey) {
     adapters.push(new PriceChartingAdapter({ api_key: pcKey }));
     log("registry", "built PriceChartingAdapter");
   } else {
@@ -160,7 +167,7 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
 
   // Discogs requires no credentials — enabled by default unless explicitly disabled.
   const discogsCfg = cfg.discogs ?? {};
-  if (discogsCfg.enabled !== false) {
+  if (discogsCfg.enabled !== false && !headlessDisabled) {
     adapters.push(new DiscogsAdapter());
     log("registry", "built DiscogsAdapter (no-auth; search() returns empty, provides discovery queries)");
   } else {
@@ -183,7 +190,7 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
 
   // TCGPlayer marketplace search — no credentials needed
   const tcgMarketCfg = cfg.tcgplayer_market ?? {};
-  if (tcgMarketCfg.enabled !== false) {
+  if (tcgMarketCfg.enabled !== false && !headlessDisabled) {
     adapters.push(new TcgPlayerMarketAdapter());
     log("registry", "built TcgPlayerMarketAdapter (no-auth; public search API)");
   } else {
@@ -270,11 +277,11 @@ export function buildAdapters(cfg: AdapterConfig): IMarketplaceAdapter[] {
   ];
   for (const [name, key, factory] of shopifyStores) {
     const conf = (cfg[key] as { enabled?: boolean } | undefined) ?? {};
-    if (conf.enabled !== false) {
+    if (conf.enabled !== false && !headlessDisabled) {
       adapters.push(factory());
       log("registry", `built ${name}Adapter (Shopify public API)`);
     } else {
-      log("registry", `${name}Adapter skipped (disabled in config)`);
+      log("registry", `${name}Adapter skipped (${headlessDisabled ? "headless adapters disabled" : "disabled in config"})`);
     }
   }
 

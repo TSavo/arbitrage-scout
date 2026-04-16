@@ -1,20 +1,23 @@
 #!/bin/bash
 # Daily arbitrage scout: stock → scan → verify → trends → arbitrage → platforms
-# Run via cron: 0 13 * * * ~/Projects/arbitrage-scout-ts/bin/daily-scan.sh
-# (6am Pacific = 13:00 UTC)
+# Runs inside the battleaxe Docker container (WORKDIR /app, env from compose)
+# or from the Mac checkout. Detects its environment via pwd.
 
 set -euo pipefail
-cd ~/Projects/arbitrage-scout-ts
 
+# Container has app at /app; Mac has it under ~/Projects. Both ship env via
+# compose (container) or shell-sourced .env.local (Mac).
+if [ -d /app ] && [ "$(pwd)" = "/app" ]; then
+  : # container — env is already set from compose, pwd is /app
+else
+  cd ~/Projects/arbitrage-scout-ts
+  set -a; source .env.local 2>/dev/null || true; set +a
+fi
+
+mkdir -p data
 LOG="data/daily-$(date +%Y-%m-%d).log"
 exec >> "$LOG" 2>&1
 echo "=== $(date) ==="
-
-# Load env
-set -a
-source .env.local 2>/dev/null || true
-set +a
-export DB_PATH=data/scout-v2.db
 
 # 1. Download fresh PriceCharting CSVs
 echo "[1/7] Downloading CSVs..."
