@@ -199,11 +199,11 @@ export class ProductRepo implements IRepository<Product, string> {
         nodeLabel: taxonomyNodes.label,
         nodePath: taxonomyNodes.pathCache,
         productCount: sql<number>`cast(count(distinct ${products.id}) as integer)`,
-        avgLoose: sql<number>`round(avg(${pricePoints.priceUsd}), 2)`,
+        avgLoose: sql<number>`round(CAST(avg(${pricePoints.priceUsd}) AS numeric), 2)`,
         totalVolume: sql<number>`cast(coalesce(sum(${products.salesVolume}), 0) as integer)`,
-        avgVolume: sql<number>`round(avg(${products.salesVolume}), 1)`,
-        pctAbove50: sql<number>`round(sum(case when ${pricePoints.priceUsd} >= 50 then 1 else 0 end) * 100.0 / count(*), 1)`,
-        pctAbove100: sql<number>`round(sum(case when ${pricePoints.priceUsd} >= 100 then 1 else 0 end) * 100.0 / count(*), 1)`,
+        avgVolume: sql<number>`round(CAST(avg(${products.salesVolume}) AS numeric), 1)`,
+        pctAbove50: sql<number>`round(CAST(sum(case when ${pricePoints.priceUsd} >= 50 then 1 else 0 end) * 100.0 / count(*) AS numeric), 1)`,
+        pctAbove100: sql<number>`round(CAST(sum(case when ${pricePoints.priceUsd} >= 100 then 1 else 0 end) * 100.0 / count(*) AS numeric), 1)`,
       })
       .from(products)
       .innerJoin(
